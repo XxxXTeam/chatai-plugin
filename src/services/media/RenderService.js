@@ -2,7 +2,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { logService } from '../stats/LogService.js'
-import { renderMarkdownToCanvas } from './canvasRenderer.js'
+import { renderMarkdownToCanvas, unwrapMarkdownFence } from './canvasRenderer.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -226,6 +226,8 @@ class RenderService {
     convertToLatex(text) {
         if (!text) return text
         if (/\$[\s\S]+?\$/.test(text)) return text
+        // 已有定界符的 LaTeX 直接交给解析器，避免自动转换再次包裹并破坏公式。
+        if (/\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)/.test(text)) return text
 
         let result = text
         result = result.replace(/\[([^\[\]]+)\]\/\[([^\[\]]+)\]/g, '\\frac{$1}{$2}')
@@ -730,11 +732,7 @@ class RenderService {
      */
     cleanMarkdown(text, { stripEmoji = true } = {}) {
         if (!text) return ''
-        let clean = text.trim()
-        // 移除开头的 ```markdown 或 ``` 标记
-        clean = clean.replace(/^```(?:markdown|md)?\s*\n?/i, '')
-        // 移除结尾的 ``` 标记
-        clean = clean.replace(/\n?```\s*$/i, '')
+        let clean = unwrapMarkdownFence(text)
         if (stripEmoji) {
             // Canvas 无法渲染 Emoji，需要移除
             clean = clean.replace(/[\u{1F300}-\u{1F9FF}]/gu, '') // 常见 Emoji
@@ -744,7 +742,7 @@ class RenderService {
             clean = clean.replace(/[\u{1F680}-\u{1F6FF}]/gu, '') // 交通和地图符号
             clean = clean.replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '') // 国旗
         }
-        return clean.trim()
+        return clean
     }
 
     /**
@@ -779,7 +777,7 @@ class RenderService {
             canvasModule,
             theme,
             width,
-            title: title ? `${icon} ${title}` : '',
+            title: title && icon && !title.startsWith(`${icon} `) ? `${icon} ${title}` : title,
             subtitle,
             showTimestamp,
             fontFamily: 'LXGW, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif'
@@ -825,7 +823,7 @@ class RenderService {
                           const badge = ['👑', '🥈', '🥉'][i] || `#${i + 1}`
                           return `${badge} ${u.name || '用户'}：${u.count} 条`
                       })
-                      .join('\n')
+                      .join('\n\n')
                 : ''
 
         const md = [
@@ -885,9 +883,7 @@ class RenderService {
             quotes && quotes.length > 0 ? `💬 金句：${quotes.join(' · ')}` : '',
             '',
             markdown
-        ]
-            .filter(Boolean)
-            .join('\n')
+        ].join('\n\n')
 
         return this.renderMarkdownToImage({
             markdown: md,

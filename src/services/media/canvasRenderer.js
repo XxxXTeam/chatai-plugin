@@ -1,32 +1,13 @@
+import { Marked } from 'marked'
+import { load } from 'cheerio'
+import hljs from 'highlight.js'
 import { mathjax } from 'mathjax-full/js/mathjax.js'
 import { TeX } from 'mathjax-full/js/input/tex.js'
 import { SVG } from 'mathjax-full/js/output/svg.js'
 import { liteAdaptor } from 'mathjax-full/js/adaptors/liteAdaptor.js'
 import { RegisterHTMLHandler } from 'mathjax-full/js/handlers/html.js'
 import { AllPackages } from 'mathjax-full/js/input/tex/AllPackages.js'
-import hljs from 'highlight.js'
-import javascript from 'highlight.js/lib/languages/javascript'
-import python from 'highlight.js/lib/languages/python'
-import bash from 'highlight.js/lib/languages/bash'
-import json from 'highlight.js/lib/languages/json'
-import yaml from 'highlight.js/lib/languages/yaml'
-import typescript from 'highlight.js/lib/languages/typescript'
-import xml from 'highlight.js/lib/languages/xml'
-import css from 'highlight.js/lib/languages/css'
-import markdown from 'highlight.js/lib/languages/markdown'
 
-// highlight.js 核心默认只带少量语言，此处注册常用语言（幂等）
-if (!hljs.getLanguage('javascript')) hljs.registerLanguage('javascript', javascript)
-if (!hljs.getLanguage('python')) hljs.registerLanguage('python', python)
-if (!hljs.getLanguage('bash')) hljs.registerLanguage('bash', bash)
-if (!hljs.getLanguage('json')) hljs.registerLanguage('json', json)
-if (!hljs.getLanguage('yaml')) hljs.registerLanguage('yaml', yaml)
-if (!hljs.getLanguage('typescript')) hljs.registerLanguage('typescript', typescript)
-if (!hljs.getLanguage('xml')) hljs.registerLanguage('xml', xml)
-if (!hljs.getLanguage('css')) hljs.registerLanguage('css', css)
-if (!hljs.getLanguage('markdown')) hljs.registerLanguage('markdown', markdown)
-
-/** 主题配色 */
 const THEMES = {
     light: {
         bg: '#f7f7f7',
@@ -34,412 +15,587 @@ const THEMES = {
         text: '#333333',
         heading: '#1a1a1a',
         accent: '#0056b3',
-        border: 'rgba(0,0,0,0.1)',
+        border: '#dddddd',
         codeBg: '#f4f4f4',
         quoteBg: '#f9f9f9',
-        quoteBar: '#ddd',
+        quoteBar: '#bbbbbb',
         tableHeader: '#f0f0f0',
-        tableBorder: '#e0e0e0'
+        keyword: '#8250df',
+        string: '#116329',
+        number: '#953800',
+        comment: '#57606a',
+        name: '#0550ae'
     },
     dark: {
         bg: '#16162a',
         containerBg: '#1d1d35',
         text: '#e4e4e4',
         heading: '#ffffff',
-        accent: '#4da6ff',
-        border: 'rgba(255,255,255,0.1)',
+        accent: '#79b8ff',
+        border: '#444468',
         codeBg: '#12122a',
         quoteBg: '#24244a',
-        quoteBar: '#555',
+        quoteBar: '#777799',
         tableHeader: '#2a2a50',
-        tableBorder: '#444468'
+        keyword: '#d2a8ff',
+        string: '#a5d6a7',
+        number: '#ffa657',
+        comment: '#a0a8b7',
+        name: '#79c0ff'
     }
 }
 
-/** 每行一个块级元素的解析结果 */
-class Block {
-    constructor(type, ...args) {
-        this.type = type
-        this.args = args
-    }
+// 单张 PNG 的边界：超限交给调用方已有的文本回退，避免分配超大原生位图。
+const MAX_TEXT_LENGTH = 100_000
+const MAX_PIXELS = 32_000_000
+const MAX_HEIGHT = 32_000
+const MAX_FORMULAS = 256
+const MAX_DEPTH = 32
+const DEFAULT_PIXEL_RATIO = 2
+const graphemes = new Intl.Segmenter('zh-CN', { granularity: 'grapheme' })
+
+/** 仅解开完整的 markdown/md 外包装；无语言或其他语言围栏是正文代码。 */
+export function unwrapMarkdownFence(text) {
+    const source = String(text ?? '').replace(/\r\n?/g, '\n')
+    const trimmed = source.trim()
+    const match = /^(`{3,}|~{3,})(?:markdown|md)[ \t]*\n([\s\S]*?)\n\1[ \t]*$/i.exec(trimmed)
+    if (!match) return source
+    // 提前闭合的围栏说明并非完整外包装。
+    const fence = match[1][0] === '`' ? '`' : '~'
+    if (new RegExp(`^ {0,3}${fence}{${match[1].length},}[ \\t]*$`, 'm').test(match[2])) return source
+    return match[2]
 }
 
-/** 行内解析：识别 `code`、$公式$、**粗**、*斜*、[链接](url)、![图](url) */
-function parseInline(line, formulaImages) {
-    const tokens = []
-    let i = 0
-    const n = line.length
-
-    const pushText = t => {
-        if (!t) return
-        const last = tokens[tokens.length - 1]
-        if (last && last.type === 'text') last.text += t
-        else tokens.push({ type: 'text', text: t })
-    }
-
-    while (i < n) {
-        // 图片 ![...](url)
-        const imgMatch = /^!\[([^\]]*)\]\(([^)\s]+)\)/.exec(line.slice(i))
-        if (imgMatch) {
-            tokens.push({ type: 'image', text: imgMatch[1], meta: imgMatch[2] })
-            i += imgMatch[0].length
-            continue
-        }
-        // 链接 [text](url)
-        const linkMatch = /^\[([^\]]+)\]\(([^)\s]+)\)/.exec(line.slice(i))
-        if (linkMatch) {
-            pushText(linkMatch[1])
-            i += linkMatch[0].length
-            continue
-        }
-        // 行内公式 $...$
-        const mathMatch = /^\$([^$\n]+?)\$/.exec(line.slice(i))
-        if (mathMatch) {
-            tokens.push({ type: 'math', text: mathMatch[1] })
-            i += mathMatch[0].length
-            continue
-        }
-        // 代码 `...`
-        const codeMatch = /^`([^`\n]+?)`/.exec(line.slice(i))
-        if (codeMatch) {
-            tokens.push({ type: 'code', text: codeMatch[1] })
-            i += codeMatch[0].length
-            continue
-        }
-        // 粗体 **...**
-        const boldMatch = /^\*\*([^*]+?)\*\*/.exec(line.slice(i))
-        if (boldMatch) {
-            tokens.push({ type: 'bold', text: boldMatch[1] })
-            i += boldMatch[0].length
-            continue
-        }
-        // 斜体 *...*
-        const italicMatch = /^\*([^*\n]+?)\*/.exec(line.slice(i))
-        if (italicMatch) {
-            tokens.push({ type: 'italic', text: italicMatch[1] })
-            i += italicMatch[0].length
-            continue
-        }
-
-        // 普通字符：尽量贪心地推进到下一个特殊起点
-        const nextSpecial = line.slice(i).search(/[!*$`\[]/)
-        if (nextSpecial === -1) {
-            pushText(line.slice(i))
-            i = n
-        } else if (nextSpecial === 0) {
-            // 特殊字符但不匹配（如单个 * 或 [ 无闭合），原样保留该字符
-            pushText(line[i])
-            i += 1
-        } else {
-            pushText(line.slice(i, i + nextSpecial))
-            i += nextSpecial
-        }
-    }
-    if (formulaImages) {
-        for (const token of tokens) {
-            if (token.type === 'math') {
-                const key = token.text
-                if (formulaImages.has(key)) {
-                    token.image = formulaImages.get(key)
-                }
+function mathToken(src, block) {
+    const prefix = block ? /^ {0,3}/.exec(src)[0].length : 0
+    const rest = src.slice(prefix)
+    const delimiters = block
+        ? [
+              ['$$', '$$'],
+              ['\\[', '\\]']
+          ]
+        : [
+              ['$$', '$$'],
+              ['\\[', '\\]'],
+              ['\\(', '\\)'],
+              ['$', '$']
+          ]
+    for (const [open, close] of delimiters) {
+        if (!rest.startsWith(open)) continue
+        if (open === '$' && (rest.startsWith('$$') || /\s/.test(rest[1] || ' '))) continue
+        let end = open.length
+        while ((end = rest.indexOf(close, end)) !== -1) {
+            let slashCount = 0
+            for (let i = end - 1; i >= 0 && rest[i] === '\\'; i--) slashCount++
+            if (slashCount % 2) {
+                end += close.length
+                continue
+            }
+            const text = rest.slice(open.length, end)
+            const tail = rest.slice(end + close.length)
+            if (!text.trim()) return
+            if (open === '$' && (/[\n`]/.test(text) || /\s$/.test(text) || /^\d/.test(tail))) return
+            if (block && !/^[ \t]*(?:\n|$)/.test(tail)) return
+            const raw = src.slice(0, prefix + end + close.length) + (block ? /^[ \t]*(?:\n|$)/.exec(tail)[0] : '')
+            return {
+                type: block ? 'mathBlock' : 'mathInline',
+                raw,
+                text: text.trim(),
+                display: block || open === '$$' || open === '\\['
             }
         }
     }
-    return tokens
 }
 
-/** 提取 Markdown 块级结构 */
-function parseBlocks(markdown) {
-    const lines = String(markdown || '')
-        .replace(/\r\n/g, '\n')
-        .split('\n')
-    const blocks = []
-    let i = 0
-
-    while (i < lines.length) {
-        const line = lines[i]
-        const trimmed = line.trim()
-
-        // 空行
-        if (!trimmed) {
-            i++
-            continue
-        }
-
-        // 分隔线
-        if (/^([-*_])\1{2,}\s*$/.test(trimmed)) {
-            blocks.push(new Block('hr'))
-            i++
-            continue
-        }
-
-        // 代码块 ```lang
-        if (/^```/.test(trimmed)) {
-            const lang = trimmed.replace(/^```/, '').trim()
-            const codeLines = []
-            i++
-            while (i < lines.length && !/^```/.test(lines[i].trim())) {
-                codeLines.push(lines[i])
-                i++
+// 使用独立实例，不改变项目其他调用方的 marked 全局配置。
+const markdownParser = new Marked({ gfm: true, breaks: false })
+markdownParser.use({
+    extensions: [
+        {
+            name: 'mathBlock',
+            level: 'block',
+            start(src) {
+                return src.search(/^ {0,3}(?:\$\$|\\\[)/m)
+            },
+            tokenizer(src) {
+                return mathToken(src, true)
             }
-            i++ // 跳过结束 ```（若存在）
-            blocks.push(new Block('code', codeLines.join('\n'), lang))
-            continue
-        }
-
-        // 表格：连续以 | 开头的行
-        if (
-            /^\s*\|/.test(line) &&
-            i + 1 < lines.length &&
-            /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1].trim()) &&
-            lines[i + 1].includes('-')
-        ) {
-            const header = line
-                .trim()
-                .replace(/^\||\|$/g, '')
-                .split('|')
-                .map(c => c.trim())
-            i += 2 // 跳过分隔行
-            const rows = []
-            while (i < lines.length && /^\s*\|/.test(lines[i])) {
-                rows.push(
-                    lines[i]
-                        .trim()
-                        .replace(/^\||\|$/g, '')
-                        .split('|')
-                        .map(c => c.trim())
-                )
-                i++
-            }
-            blocks.push(new Block('table', header, rows))
-            continue
-        }
-
-        // 标题 / 列表 / 引用 / 无序列表 / 普通段落：逐行或合并段
-        if (/^\s{0,3}#{1,6}\s/.test(line)) {
-            const m = /^\s{0,3}(#{1,6})\s+(.+)$/.exec(line)
-            blocks.push(new Block('heading', m[2].trim(), m[1].length))
-            i++
-            continue
-        }
-
-        if (/^\s*[-+*]\s+/.test(line)) {
-            const text = line.replace(/^\s*[-+*]\s+/, '').trim()
-            blocks.push(new Block('list', text, false))
-            i++
-            continue
-        }
-
-        if (/^\s*\d+[.)]\s+/.test(line)) {
-            const text = line.replace(/^\s*\d+[.)]\s+/, '').trim()
-            blocks.push(new Block('list', text, true))
-            i++
-            continue
-        }
-
-        if (/^\s*>\s?/.test(line)) {
-            const text = line.replace(/^\s*>\s?/, '').trim()
-            blocks.push(new Block('quote', text))
-            i++
-            continue
-        }
-
-        // 普通段落：合并连续非空、非结构行
-        const paraLines = []
-        while (
-            i < lines.length &&
-            lines[i].trim() !== '' &&
-            !/^\s{0,3}#{1,6}\s/.test(lines[i]) &&
-            !/^\s*[-+*]\s+/.test(lines[i]) &&
-            !/^\s*\d+[.)]\s+/.test(lines[i]) &&
-            !/^\s*>\s?/.test(lines[i]) &&
-            !/^```/.test(lines[i].trim()) &&
-            !/^\s*\|/.test(lines[i]) &&
-            !/^([-*_])\1{2,}\s*$/.test(lines[i].trim())
-        ) {
-            paraLines.push(lines[i].trim())
-            i++
-        }
-        if (paraLines.length > 0) {
-            blocks.push(new Block('paragraph', paraLines.join(' ')))
-        }
-    }
-
-    return blocks
-}
-
-/** highlight.js 语义类 → 固定色板（与主题解耦，用可读性高的深/浅两套） */
-const HLJS_COLORS = {
-    default: '#e4e4e4',
-    'hljs-keyword': '#c678dd',
-    'hljs-built_in': '#e6c07b',
-    'hljs-type': '#e6c07b',
-    'hljs-string': '#98c379',
-    'hljs-number': '#d19a66',
-    'hljs-comment': '#7f848e',
-    'hljs-title': '#61afef',
-    'hljs-function': '#61afef',
-    'hljs-params': '#abb2bf',
-    'hljs-attr': '#d19a66',
-    'hljs-attribute': '#d19a66',
-    'hljs-property': '#61afef',
-    'hljs-variable': '#e06c75',
-    'hljs-literal': '#d19a66',
-    'hljs-tag': '#e06c75',
-    'hljs-name': '#e06c75',
-    'hljs-meta': '#7f848e',
-    'hljs-symbol': '#d19a66',
-    'hljs-bullet': '#61afef',
-    'hljs-link': '#56b6c2',
-    'hljs-emphasis': '#e06c75',
-    'hljs-strong': '#e06c75'
-}
-
-/** 用注入的 highlight.js 实例对代码块做 token 化高亮 */
-function highlightCodeWithHljs(code, lang, hljs) {
-    try {
-        const normalizedLang = String(lang || '').toLowerCase()
-        const language = normalizedLang && hljs.getLanguage(normalizedLang) ? normalizedLang : null
-        if (!language && normalizedLang) {
-            // 常见别名归一
-            const alias = {
-                js: 'javascript',
-                ts: 'typescript',
-                py: 'python',
-                sh: 'bash',
-                yml: 'yaml',
-                md: 'markdown',
-                shell: 'bash'
-            }[normalizedLang]
-            if (alias && hljs.getLanguage(alias)) {
-                const result = hljs.highlight(code, { language: alias, ignoreIllegals: true })
-                return tokenizeHljsHtml(result.value)
-            }
-            return null
-        }
-        if (!language) return null
-        const result = hljs.highlight(code, { language, ignoreIllegals: true })
-        return tokenizeHljsHtml(result.value)
-    } catch {
-        return null
-    }
-}
-
-/** 把 hljs 输出的 HTML 行转成 { text, color } token 行 */
-function tokenizeHljsHtml(html) {
-    return String(html)
-        .split('\n')
-        .map(lineHtml => {
-            const tokens = []
-            const re = /<span class="([^"]+)">([\s\S]*?)<\/span>|([^<]+)/g
-            let m
-            while ((m = re.exec(lineHtml)) !== null) {
-                if (m[1] && m[2]) {
-                    const cls = m[1].includes('hljs-') ? m[1] : 'hljs-' + m[1]
-                    tokens.push({ text: m[2], color: HLJS_COLORS[cls] || HLJS_COLORS.default })
-                } else if (m[3]) {
-                    tokens.push({ text: m[3], color: HLJS_COLORS.default })
-                }
-            }
-            return tokens.length ? tokens : [{ text: '', color: HLJS_COLORS.default }]
-        })
-}
-
-/** 从 markdown 中提取所有公式（块级与行内），返回 Map<公式文本, Image> */
-async function extractFormulas(markdown, { canvasModule, baseFontSizePx }) {
-    const formulas = new Map()
-
-    const collect = text => {
-        const regexes = [
-            /\$\$([\s\S]+?)\$\$/g, // $$...$$
-            /\$([^$\n]+?)\$/g, // $...$
-            /\\\[([\s\S]+?)\\\]/g, // \[...\]
-            /\\\(([^\\\n]+?)\\\)/g // \(...\)
-        ]
-        for (const re of regexes) {
-            let m
-            while ((m = re.exec(text)) !== null) {
-                const latex = m[1].trim()
-                if (latex && !formulas.has(latex)) {
-                    formulas.set(latex, null) // 占位，稍后填充
-                }
+        },
+        {
+            name: 'mathInline',
+            level: 'inline',
+            start(src) {
+                return src.search(/\$|\\[([]/)
+            },
+            tokenizer(src) {
+                return mathToken(src, false)
             }
         }
-    }
+    ]
+})
 
-    // 先收集所有公式文本
-    const scan = block => {
-        if (block.type === 'paragraph' || block.type === 'quote' || block.type === 'list') {
-            collect(block.args[0])
-        } else if (block.type === 'heading') {
-            collect(block.args[0])
-        } else if (block.type === 'table') {
-            collect(block.args[0].join(' '))
-            for (const row of block.args[1]) collect(row.join(' '))
-        }
-    }
-    const blocks = parseBlocks(markdown)
-    for (const block of blocks) scan(block)
-
-    // 渲染公式为 Image（mathjax SVG → @napi-rs/canvas）
-    for (const latex of formulas.keys()) {
-        try {
-            formulas.set(latex, await renderLatexImage(latex, { canvasModule, baseFontSizePx }))
-        } catch {
-            formulas.set(latex, null)
-        }
-    }
-    return { formulas, blocks }
+// 只解码实体，先保护字面量 <，不把 Markdown 文本作为 HTML 解析。
+function decodeEntities(text) {
+    return text.includes('&') ? load(text.replace(/</g, '&lt;'), {}, false).root().text() : text
 }
 
-// ---- mathjax 单例（lazy）----
-let mathJaxEngine = null
+let mathJaxEngine
 function getMathJax() {
-    if (mathJaxEngine) return mathJaxEngine
-    const adaptor = liteAdaptor()
-    RegisterHTMLHandler(adaptor)
-    const tex = new TeX({ packages: AllPackages })
-    const svg = new SVG({ fontCache: 'none' })
-    const html = mathjax.document('', { InputJax: tex, OutputJax: svg })
-    mathJaxEngine = { adaptor, html }
+    if (!mathJaxEngine) {
+        const adaptor = liteAdaptor()
+        RegisterHTMLHandler(adaptor)
+        const html = mathjax.document('', {
+            InputJax: new TeX({
+                packages: AllPackages.filter(name => !['noerrors', 'noundefined'].includes(name)),
+                maxBuffer: 10_000,
+                maxMacros: 1000
+            }),
+            OutputJax: new SVG({ fontCache: 'none' })
+        })
+        mathJaxEngine = { adaptor, html }
+    }
     return mathJaxEngine
 }
-async function renderLatexImage(latex, { canvasModule, baseFontSizePx = 18 }) {
+
+async function renderLatexImage(
+    latex,
+    { canvasModule, fontSize = 18, display = false, color = '#333333', pixelRatio = DEFAULT_PIXEL_RATIO }
+) {
+    if (latex.length > 10_000) throw new RangeError('公式过长')
     const { adaptor, html } = getMathJax()
-    const node = html.convert(latex, { display: false })
-    const full = adaptor.outerHTML(node)
-    const start = full.indexOf('<svg')
-    const end = full.indexOf('</svg>') + 6
-    if (start < 0 || end < start + 6) {
-        throw new Error('mathjax 未输出 SVG')
+    const output = adaptor.outerHTML(html.convert(latex, { display }))
+    const match = /<svg\b[\s\S]*?<\/svg>/.exec(output)
+    if (!match || output.includes('data-mjx-error=')) throw new Error('公式无法解析')
+    let svg = match[0]
+    // 只替换根节点尺寸，不能误改公式文本或路径中的 em/ex 字符。
+    const root = /^<svg\b[^>]*>/.exec(svg)[0]
+    const dimension = name => {
+        const m = new RegExp(`${name}="([\\d.eE+-]+)(ex|em|px)?"`).exec(root)
+        if (!m) throw new Error('公式尺寸无效')
+        return Number(m[1]) * (m[2] === 'ex' ? fontSize * 0.43 : m[2] === 'em' ? fontSize : 1)
     }
-    let svgTag = full.substring(start, end)
-    const EM = baseFontSizePx
-    // ex/em 单位换算为像素（mathjax 1ex = 0.43em）
-    svgTag = svgTag.replace(/([\d.eE+-]+)ex/g, m => String(parseFloat(m) * EM * 0.43))
-    svgTag = svgTag.replace(/([\d.eE+-]+)em/g, m => String(parseFloat(m) * EM))
-    return await canvasModule.loadImage(Buffer.from(svgTag))
+    const w = dimension('width'),
+        h = dimension('height')
+    if (!(w > 0 && h > 0 && Number.isFinite(w + h))) throw new Error('公式尺寸无效')
+    const scale = Math.min(1, 4096 / w, 4096 / h, Math.sqrt(4_000_000 / (w * h)))
+    // 保留原来的逻辑尺寸；提高 SVG 栅格尺寸不能改变公式占宽、行高和换行。
+    const width = Math.max(1, Math.floor(w * scale))
+    const height = Math.max(1, Math.floor(h * scale))
+    const rasterScale = Math.min(pixelRatio, 4096 / width, 4096 / height, Math.sqrt(4_000_000 / (width * height)))
+    const rasterWidth = Math.max(1, Math.floor(width * rasterScale))
+    const rasterHeight = Math.max(1, Math.floor(height * rasterScale))
+    const scaledRoot = root
+        .replace(/width="[^"]*"/, `width="${rasterWidth}"`)
+        .replace(/height="[^"]*"/, `height="${rasterHeight}"`)
+    svg = (scaledRoot + svg.slice(root.length)).replace(/currentColor/g, color)
+    return { image: await canvasModule.loadImage(Buffer.from(svg)), width, height }
 }
 
-function imageLayoutWidth(_token, _baseFontSizePx) {
-    return 0
+function highlightRuns(code, language, style, palette) {
+    const lang = String(language || '')
+        .trim()
+        .split(/\s+/)[0]
+        .toLowerCase()
+    if (!lang || !hljs.getLanguage(lang)) return [{ text: code, style }]
+    try {
+        // highlight.js 的嵌套 span 和实体由已有 cheerio 正确解析；不执行 HTML。
+        const tree = load(hljs.highlight(code, { language: lang, ignoreIllegals: true }).value, {}, false)
+        const runs = []
+        const visit = (node, inherited) => {
+            if (node.type === 'text') {
+                runs.push({ text: node.data, style: inherited })
+                return
+            }
+            const classes = (node.attribs?.class || '').split(/\s+/)
+            let color = inherited.color
+            for (const cls of classes) {
+                if (/^hljs-(keyword|literal|type|built_in)$/.test(cls)) color = palette.keyword
+                else if (/^hljs-(string|regexp)$/.test(cls)) color = palette.string
+                else if (/^hljs-(number|attr|attribute)$/.test(cls)) color = palette.number
+                else if (/^hljs-(comment|meta)$/.test(cls)) color = palette.comment
+                else if (/^hljs-(title|name|tag|variable|property)$/.test(cls)) color = palette.name
+            }
+            for (const child of node.children || []) visit(child, { ...inherited, color })
+        }
+        for (const node of tree.root().contents().toArray()) visit(node, style)
+        return runs
+    } catch {
+        return [{ text: code, style }]
+    }
 }
 
-/**
- * 主要渲染入口：将 markdown 渲染为 PNG Buffer。
- * @param {string} markdown - Markdown 文本
- * @param {Object} options - 渲染选项
- * @param {Object} options.canvasModule - @napi-rs/canvas 模块
- * @param {string} [options.theme='light'] - 主题
- * @param {number} [options.width=800] - 画布宽度
- * @param {string} [options.title=''] - 标题
- * @param {string} [options.subtitle=''] - 副标题
- * @param {boolean} [options.showTimestamp=true] - 是否显示时间戳
- * @param {number} [options.fontSize=15] - 正文字号
- * @param {string} [options.fontFamily] - 字体族
- * @param {string} [options.codeFont] - 等宽字体
- * @returns {Promise<Buffer>} PNG 图片
- */
+function font(style) {
+    return `${style.italic ? 'italic ' : ''}${style.bold ? '600 ' : ''}${style.size}px ${style.family}`
+}
+
+/** 布局产生绝对坐标绘制指令；最终绘制不再重新测量或再次换行。 */
+class CanvasLayout {
+    constructor(ctx, options) {
+        Object.assign(this, options)
+        this.ctx = ctx
+        this.formulas = new Map()
+        this.base = { size: options.fontSize, family: options.fontFamily, color: options.palette.text }
+    }
+
+    checkHeight(y) {
+        if (y > this.maxHeight) throw new RangeError('Markdown 图片过高，请缩短内容或使用文本输出')
+    }
+
+    async inline(tokens, style = this.base, depth = 0) {
+        if (depth > MAX_DEPTH) throw new RangeError('Markdown 嵌套过深')
+        const runs = []
+        for (const token of tokens || []) {
+            switch (token.type) {
+                case 'strong':
+                case 'em':
+                case 'del':
+                case 'link': {
+                    const next = { ...style }
+                    if (token.type === 'strong') next.bold = true
+                    if (token.type === 'em') next.italic = true
+                    if (token.type === 'del') next.strike = true
+                    if (token.type === 'link') {
+                        next.color = this.palette.accent
+                        next.underline = true
+                    }
+                    runs.push(...(await this.inline(token.tokens, next, depth + 1)))
+                    break
+                }
+                case 'codespan':
+                    runs.push({
+                        text: token.text,
+                        preserveWhitespace: true,
+                        style: {
+                            ...style,
+                            size: style.size * 0.9,
+                            family: this.codeFont,
+                            background: this.palette.codeBg
+                        }
+                    })
+                    break
+                case 'br':
+                    runs.push({ break: true })
+                    break
+                case 'image':
+                    runs.push({ text: `[图片${token.text ? ':' + decodeEntities(token.text) : ''}]`, style })
+                    break
+                case 'mathInline':
+                case 'mathBlock': {
+                    const key = JSON.stringify([token.text, token.display, style.size, style.color])
+                    if (!this.formulas.has(key)) {
+                        if (this.formulas.size >= MAX_FORMULAS) throw new RangeError('公式数量过多')
+                        let image = null
+                        try {
+                            image = await renderLatexImage(token.text, {
+                                canvasModule: this.canvasModule,
+                                fontSize: style.size,
+                                display: token.display,
+                                color: style.color,
+                                pixelRatio: this.pixelRatio
+                            })
+                        } catch {
+                            /* 无效公式保留源文本，不能让整张回复丢失。 */
+                        }
+                        this.formulas.set(key, image)
+                    }
+                    const image = this.formulas.get(key)
+                    runs.push(image ? { ...image, style } : { text: token.raw.trim(), style })
+                    break
+                }
+                case 'checkbox':
+                    break // 列表项统一绘制，防止 marked 新版重复 checkbox。
+                case 'html':
+                    runs.push({ text: token.raw, style })
+                    break
+                default:
+                    if (token.tokens) runs.push(...(await this.inline(token.tokens, style, depth + 1)))
+                    else
+                        runs.push({
+                            text: token.type === 'escape' ? token.text : decodeEntities(token.text || token.raw || ''),
+                            style
+                        })
+            }
+        }
+        return runs
+    }
+
+    text(runs, x, y, width, { align = 'left', preserveWhitespace = false, baseSize = this.fontSize } = {}) {
+        if (width < 1) throw new RangeError('Markdown 嵌套或表格列数超出可用宽度')
+        const ops = [],
+            lines = []
+        let items = [],
+            used = 0,
+            height = baseSize * 1.7
+        const finish = () => {
+            lines.push({ items, width: used, height })
+            items = []
+            used = 0
+            height = baseSize * 1.7
+        }
+        const append = item => {
+            if (used + item.width > width + 0.01 && items.length) finish()
+            // 超宽公式/单字等比缩放到可用宽度，既不截字也不扩大整行。
+            if (item.width > width) {
+                const ratio = width / item.width
+                item = { ...item, width, height: item.height * ratio, scale: ratio }
+            }
+            items.push({ ...item, x: used })
+            used += item.width
+            height = Math.max(height, item.height + baseSize * 0.35)
+        }
+        for (const run of runs) {
+            if (run.break) {
+                finish()
+                continue
+            }
+            if (run.image) {
+                append({ image: run.image, width: run.width, height: run.height, style: run.style })
+                continue
+            }
+            const value =
+                preserveWhitespace || run.preserveWhitespace
+                    ? run.text.replace(/\t/g, '    ')
+                    : run.text.replace(/\s+/g, ' ')
+            // 单词优先换行；中文、超长 URL/代码按字素切分，保留 emoji 组合。
+            for (const piece of value.match(/\n|[^\S\n]+|[A-Za-z0-9_]+|[^A-Za-z0-9_\s]+/gu) || []) {
+                if (piece === '\n') {
+                    finish()
+                    continue
+                }
+                this.ctx.font = font(run.style)
+                const measure = text => this.ctx.measureText(text).width
+                const pieceWidth = measure(piece)
+                if (pieceWidth <= width) {
+                    append({ text: piece, width: pieceWidth, height: run.style.size * 1.2, style: run.style })
+                } else {
+                    let chunk = ''
+                    for (const { segment } of graphemes.segment(piece)) {
+                        const next = chunk + segment
+                        if (chunk && measure(next) > width - used) {
+                            append({
+                                text: chunk,
+                                width: measure(chunk),
+                                height: run.style.size * 1.2,
+                                style: run.style
+                            })
+                            finish()
+                            chunk = segment
+                        } else chunk = next
+                    }
+                    if (chunk)
+                        append({ text: chunk, width: measure(chunk), height: run.style.size * 1.2, style: run.style })
+                }
+            }
+        }
+        if (items.length || !lines.length) finish()
+        let cy = y
+        for (const line of lines) {
+            const offset = align === 'center' ? (width - line.width) / 2 : align === 'right' ? width - line.width : 0
+            for (const item of line.items) {
+                const left = x + offset + item.x
+                const top = cy + (line.height - item.height) / 2
+                if (item.image)
+                    ops.push({
+                        type: 'image',
+                        image: item.image,
+                        x: left,
+                        y: top,
+                        width: item.width,
+                        height: item.height
+                    })
+                else {
+                    if (item.style.background)
+                        ops.push({
+                            type: 'rect',
+                            x: left,
+                            y: top,
+                            width: item.width,
+                            height: item.height,
+                            color: item.style.background
+                        })
+                    ops.push({
+                        type: 'text',
+                        text: item.text,
+                        x: left,
+                        y: top + item.height * 0.8,
+                        width: item.width,
+                        scale: item.scale || 1,
+                        style: item.style
+                    })
+                    if (item.style.strike || item.style.underline)
+                        ops.push({
+                            type: 'rect',
+                            x: left,
+                            y: top + item.height * (item.style.strike ? 0.48 : 0.94),
+                            width: item.width,
+                            height: 1,
+                            color: item.style.color
+                        })
+                }
+            }
+            cy += line.height
+            this.checkHeight(cy)
+        }
+        return { ops, height: cy - y }
+    }
+
+    async blocks(tokens, x, y, width, depth = 0) {
+        if (depth > MAX_DEPTH || width < this.fontSize) throw new RangeError('Markdown 嵌套或表格列数超出可用范围')
+        const ops = [],
+            startY = y,
+            gap = this.fontSize * 0.55
+        for (const token of tokens) {
+            let result
+            switch (token.type) {
+                case 'space':
+                case 'checkbox':
+                    continue
+                case 'heading': {
+                    const size = this.fontSize * [1.6, 1.4, 1.2, 1.1, 1, 1][token.depth - 1]
+                    const runs = await this.inline(token.tokens, {
+                        ...this.base,
+                        size,
+                        bold: true,
+                        color: this.palette.heading
+                    })
+                    result = this.text(runs, x + 10, y, width - 10, { baseSize: size })
+                    ops.push({
+                        type: 'rect',
+                        x,
+                        y: y + 4,
+                        width: 3,
+                        height: result.height - 8,
+                        color: this.palette.accent
+                    })
+                    break
+                }
+                case 'blockquote': {
+                    result = await this.blocks(token.tokens, x + 16, y + 8, width - 24, depth + 1)
+                    result.height += 16
+                    ops.push({ type: 'rect', x, y, width, height: result.height, color: this.palette.quoteBg })
+                    ops.push({ type: 'rect', x, y, width: 3, height: result.height, color: this.palette.quoteBar })
+                    break
+                }
+                case 'list': {
+                    const markers = token.items.map((item, i) =>
+                        item.task ? (item.checked ? '☑' : '☐') : token.ordered ? `${Number(token.start) + i}.` : '•'
+                    )
+                    this.ctx.font = font(this.base)
+                    const indent = Math.max(22, ...markers.map(m => this.ctx.measureText(m).width + 8))
+                    const listOps = [],
+                        listY = y
+                    for (let i = 0; i < token.items.length; i++) {
+                        const marker = this.text(
+                            [{ text: markers[i], style: { ...this.base, color: this.palette.accent } }],
+                            x,
+                            y,
+                            indent
+                        )
+                        const body = await this.blocks(token.items[i].tokens, x + indent, y, width - indent, depth + 1)
+                        listOps.push(...marker.ops, ...body.ops)
+                        y += Math.max(marker.height, body.height) + (token.loose ? gap : 3)
+                    }
+                    result = { ops: listOps, height: y - listY }
+                    y = listY
+                    break
+                }
+                case 'table': {
+                    const tableOps = [],
+                        tableY = y
+                    const colWidth = width / token.header.length
+                    if (colWidth - 12 < this.fontSize) throw new RangeError('表格列数过多，请增加渲染宽度')
+                    for (const [rowIndex, row] of [token.header, ...token.rows].entries()) {
+                        const cells = []
+                        for (let ci = 0; ci < token.header.length; ci++) {
+                            const style = {
+                                ...this.base,
+                                bold: rowIndex === 0,
+                                color: rowIndex === 0 ? this.palette.heading : this.palette.text
+                            }
+                            cells.push(
+                                this.text(
+                                    await this.inline(row[ci]?.tokens || [], style),
+                                    x + ci * colWidth + 6,
+                                    y + 6,
+                                    colWidth - 12,
+                                    { align: token.align[ci] }
+                                )
+                            )
+                        }
+                        const rowHeight = Math.max(...cells.map(c => c.height)) + 12
+                        if (rowIndex === 0)
+                            tableOps.push({
+                                type: 'rect',
+                                x,
+                                y,
+                                width,
+                                height: rowHeight,
+                                color: this.palette.tableHeader
+                            })
+                        for (const cell of cells) tableOps.push(...cell.ops)
+                        tableOps.push({
+                            type: 'rect',
+                            x,
+                            y: y + rowHeight - 1,
+                            width,
+                            height: 1,
+                            color: this.palette.border
+                        })
+                        for (let ci = 0; ci <= token.header.length; ci++)
+                            tableOps.push({
+                                type: 'rect',
+                                x: x + ci * colWidth,
+                                y,
+                                width: 1,
+                                height: rowHeight,
+                                color: this.palette.border
+                            })
+                        y += rowHeight
+                        this.checkHeight(y)
+                    }
+                    result = { ops: tableOps, height: y - tableY }
+                    y = tableY
+                    break
+                }
+                case 'code': {
+                    const style = { ...this.base, family: this.codeFont, size: this.fontSize * 0.9 }
+                    result = this.text(
+                        highlightRuns(token.text, token.lang, style, this.palette),
+                        x + 10,
+                        y + 8,
+                        width - 20,
+                        { preserveWhitespace: true }
+                    )
+                    result.height += 16
+                    ops.push({ type: 'rect', x, y, width, height: result.height, color: this.palette.codeBg })
+                    break
+                }
+                case 'hr':
+                    result = {
+                        ops: [{ type: 'rect', x, y: y + 8, width, height: 1, color: this.palette.border }],
+                        height: 17
+                    }
+                    break
+                case 'mathBlock':
+                    result = this.text(await this.inline([token]), x, y, width, { align: 'center' })
+                    break
+                default: {
+                    const runs =
+                        token.type === 'html'
+                            ? [{ text: token.raw, style: this.base }]
+                            : await this.inline(token.tokens || [token])
+                    result = this.text(runs, x, y, width, { preserveWhitespace: token.type === 'html' })
+                }
+            }
+            ops.push(...result.ops)
+            y += result.height + gap
+            this.checkHeight(y)
+        }
+        return { ops, height: y - startY }
+    }
+}
+
+/** Markdown → marked tokens → 一次布局 → Canvas PNG。width 为逻辑宽度，默认输出 2 倍像素。 */
 export async function renderMarkdownToCanvas(markdown, options = {}) {
     const {
         canvasModule,
@@ -449,352 +605,101 @@ export async function renderMarkdownToCanvas(markdown, options = {}) {
         subtitle = '',
         showTimestamp = true,
         fontSize = 15,
+        pixelRatio = DEFAULT_PIXEL_RATIO,
         fontFamily = 'LXGW, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif',
         codeFont = 'Inconsolata, "Courier New", monospace'
     } = options
-
     if (!canvasModule) throw new Error('Canvas 模块未加载')
+    if (pixelRatio !== 1 && pixelRatio !== 2) throw new RangeError('像素密度必须为 1 或 2')
+    if (!Number.isInteger(width) || width < 240 || width > 2400) throw new RangeError('渲染宽度必须是 240–2400 的整数')
+    if (!Number.isFinite(fontSize) || fontSize < 8 || fontSize > 48) throw new RangeError('渲染字号必须在 8–48 之间')
+    if (typeof title !== 'string' || typeof subtitle !== 'string') throw new TypeError('标题和副标题必须是字符串')
+    const source = String(markdown ?? '')
+    if (source.length + title.length + subtitle.length > MAX_TEXT_LENGTH) throw new RangeError('Markdown 内容过长')
     const palette = THEMES[theme] || THEMES.light
-    const padding = 24
-    const contentWidth = width - padding * 2
-    const { formulas, blocks } = await extractFormulas(markdown, { canvasModule, baseFontSizePx: fontSize })
-    const measured = []
-    let totalHeight = padding * 2 // 上下留白
-    const lineHeight = fontSize * 1.7
-
-    const measureCanvas = canvasModule.createCanvas(1, 1)
-    const ctx = measureCanvas.getContext('2d')
-    ctx.font = `${fontSize}px ${fontFamily}`
-
-    for (const block of blocks) {
-        let h = 0
-        switch (block.type) {
-            case 'heading': {
-                const level = block.args[1]
-                const size = fontSize * (level === 1 ? 1.5 : level === 2 ? 1.3 : 1.15)
-                const tokens = parseInline(block.args[0], formulas)
-
-                // 测量换行
-                const linesOf = []
-                let cur = []
-                let curW = 0
-                for (const token of tokens) {
-                    if (token.type === 'image') {
-                        cur.push(token)
-                        curW += imageLayoutWidth(token, fontSize)
-                        continue
-                    }
-                    ctx.font = `${size}px ${fontFamily}`
-                    const w = ctx.measureText(token.text).width
-                    if (curW + w > contentWidth && cur.length) {
-                        linesOf.push(cur)
-                        cur = [token]
-                        curW = w
-                    } else {
-                        cur.push(token)
-                        curW += w
-                    }
-                }
-                if (cur.length) linesOf.push(cur)
-                h = linesOf.length * size * 1.5 + 8
-                break
-            }
-            case 'paragraph':
-            case 'quote':
-            case 'list': {
-                const text = block.args[0]
-                const w = ctx.measureText(text).width
-                const linesCount = Math.max(1, Math.ceil(w / contentWidth))
-                h = linesCount * lineHeight + (block.type === 'quote' ? 12 : 4)
-                break
-            }
-            case 'code': {
-                const code = block.args[0]
-                const codeLines = code.split('\n')
-                h = codeLines.length * (fontSize * 1.4) + 20
-                break
-            }
-            case 'table': {
-                const rows = block.args[1]
-                h = (rows.length + 1) * lineHeight + 16
-                break
-            }
-            case 'hr':
-                h = fontSize * 1.2 + 8
-                break
-        }
-        measured.push({ block, height: h })
-        totalHeight += h
+    const layout = new CanvasLayout(canvasModule.createCanvas(1, 1).getContext('2d'), {
+        canvasModule,
+        palette,
+        fontSize,
+        fontFamily,
+        codeFont,
+        pixelRatio,
+        // 高度和总像素上限按物理位图计算，2 倍密度占用约 4 倍像素。
+        maxHeight: Math.floor(Math.min(MAX_HEIGHT / pixelRatio, MAX_PIXELS / (width * pixelRatio ** 2))) - 48
+    })
+    const padding = 24,
+        contentWidth = width - padding * 2,
+        ops = []
+    let y = padding
+    for (const [text, size, color, bold] of [
+        [title, fontSize * 1.6, palette.heading, true],
+        [subtitle, fontSize * 0.95, palette.accent, false]
+    ]) {
+        if (!text) continue
+        const result = layout.text([{ text, style: { ...layout.base, size, color, bold } }], padding, y, contentWidth, {
+            baseSize: size
+        })
+        ops.push(...result.ops)
+        y += result.height + 6
     }
-    if (title) totalHeight += fontSize * 3 + padding
-    if (showTimestamp) totalHeight += fontSize * 2
-    const canvas = canvasModule.createCanvas(width, Math.max(200, Math.ceil(totalHeight)))
-    const g = canvas.getContext('2d')
-    g.fillStyle = palette.bg
-    g.fillRect(0, 0, width, totalHeight)
-    g.fillStyle = palette.containerBg
-    g.fillRect(4, 4, width - 8, totalHeight - 8)
-    let y = padding + fontSize
-    if (title) {
-        g.fillStyle = palette.heading
-        g.font = `600 ${fontSize * 1.6}px ${fontFamily}`
-        g.fillText(title, padding, y)
-        y += fontSize * 1.8
-        if (subtitle) {
-            g.fillStyle = palette.accent
-            g.font = `${fontSize * 0.95}px ${fontFamily}`
-            g.fillText(subtitle, padding, y)
-            y += fontSize * 1.5
-        }
-        // 分隔线
-        g.strokeStyle = palette.border
-        g.beginPath()
-        g.moveTo(padding, y)
-        g.lineTo(width - padding, y)
-        g.stroke()
-        y += fontSize
+    if (title || subtitle) {
+        ops.push({ type: 'rect', x: padding, y, width: contentWidth, height: 1, color: palette.border })
+        y += 12
     }
-
-    // 内容
-    for (const item of measured) {
-        const block = item.block
-        const h = item.height
-
-        switch (block.type) {
-            case 'heading': {
-                const level = block.args[1]
-                const size = fontSize * (level === 1 ? 1.5 : level === 2 ? 1.3 : 1.15)
-
-                // 左侧装饰条
-                g.fillStyle = palette.accent
-                g.fillRect(padding, y - size * 1.2, 4, size * 1.4)
-                g.font = `600 ${size}px ${fontFamily}`
-                g.fillStyle = palette.heading
-                g.fillText(block.args[0], padding + 10, y)
-                y += h
-                break
-            }
-            case 'paragraph':
-            case 'list':
-            case 'quote': {
-                const tokens = parseInline(block.args[0], formulas)
-
-                if (block.type === 'quote') {
-                    g.fillStyle = palette.quoteBg
-                    g.fillRect(padding, y - fontSize * 1.3, contentWidth, h)
-                    g.fillStyle = palette.quoteBar
-                    g.fillRect(padding, y - fontSize * 1.3, 3, h)
-                }
-
-                // 逐行在限宽内绘制 tokens
-                const linesOf = wrapTokens(
-                    g,
-                    tokens,
-                    contentWidth - (block.type === 'quote' ? 16 : 0),
-                    fontSize,
-                    fontFamily,
-                    formulas
-                )
-                for (let li = 0; li < linesOf.length; li++) {
-                    const lineTokens = linesOf[li]
-                    let x = padding + (block.type === 'list' ? 16 : block.type === 'quote' ? 14 : 0)
-                    if (li === 0 && block.type === 'list') {
-                        g.fillStyle = palette.accent
-                        g.font = `${fontSize}px ${fontFamily}`
-                        g.fillText('◆', padding, y)
-                        x = padding + 22
-                    }
-                    if (li === 0 && block.type === 'quote') {
-                        g.fillStyle = palette.text
-                        g.font = `${fontSize * 0.9}px ${fontFamily}`
-                        g.fillText('▍', padding, y)
-                    }
-                    x = drawTokens(g, lineTokens, x, y, fontSize, fontFamily, codeFont)
-                }
-                y += h
-                break
-            }
-            case 'code': {
-                const code = block.args[0]
-                const lang = block.args[1] || ''
-                // highlight.js 已在本模块顶部注册常用语言
-                const highlighted = highlightCodeWithHljs(code, lang, hljs)
-                g.fillStyle = palette.codeBg
-                g.fillRect(padding, y - fontSize * 1.2 + 4, contentWidth, h - 8)
-                g.font = `${fontSize * 0.9}px ${codeFont}`
-                let cy = y
-                if (highlighted) {
-                    for (const lineTokens of highlighted) {
-                        let cx = padding + 12
-                        for (const token of lineTokens) {
-                            g.fillStyle = token.color || palette.text
-                            g.fillText(token.text, cx, cy)
-                            cx += g.measureText(token.text).width
-                        }
-                        cy += fontSize * 1.4
-                    }
-                } else {
-                    g.fillStyle = palette.text
-                    for (const codeLine of code.split('\n')) {
-                        g.fillText(codeLine, padding + 12, cy)
-                        cy += fontSize * 1.4
-                    }
-                }
-                y += h
-                break
-            }
-            case 'table': {
-                const header = block.args[0]
-                const rows = block.args[1]
-                const colCount = header.length
-                const colWidth = Math.floor(contentWidth / Math.max(1, colCount))
-
-                // 表头
-                g.fillStyle = palette.tableHeader
-                g.fillRect(padding, y - fontSize * 1.2, contentWidth, lineHeight + 4)
-                g.fillStyle = palette.heading
-                g.font = `600 ${fontSize}px ${fontFamily}`
-                header.forEach((cell, ci) => {
-                    g.fillText(cell, padding + ci * colWidth + 6, y)
-                })
-                y += lineHeight
-                // 数据行
-                for (const row of rows) {
-                    g.fillStyle = palette.text
-                    g.font = `${fontSize}px ${fontFamily}`
-                    row.forEach((cell, ci) => {
-                        g.fillText(String(cell || ''), padding + ci * colWidth + 6, y)
-                    })
-                    g.strokeStyle = palette.tableBorder
-                    g.beginPath()
-                    g.moveTo(padding, y + 4)
-                    g.lineTo(width - padding, y + 4)
-                    g.stroke()
-                    y += lineHeight
-                }
-                y += 8
-                break
-            }
-            case 'hr': {
-                g.strokeStyle = palette.border
-                g.beginPath()
-                g.moveTo(padding, y)
-                g.lineTo(width - padding, y)
-                g.stroke()
-                y += h
-                break
-            }
-        }
-    }
-
-    // 时间戳
+    const body = await layout.blocks(markdownParser.lexer(source), padding, y, contentWidth)
+    ops.push(...body.ops)
+    y += body.height
     if (showTimestamp) {
-        g.fillStyle = palette.text
-        g.font = `${fontSize * 0.8}px ${fontFamily}`
-        g.globalAlpha = 0.6
-        g.fillText(`生成时间：${new Date().toLocaleString('zh-CN')}`, padding, totalHeight - padding)
-        g.globalAlpha = 1
+        const footer = layout.text(
+            [
+                {
+                    text: `生成时间：${new Date().toLocaleString('zh-CN')}`,
+                    style: { ...layout.base, size: fontSize * 0.8, color: palette.comment }
+                }
+            ],
+            padding,
+            y + 8,
+            contentWidth
+        )
+        ops.push(...footer.ops)
+        y += footer.height + 8
     }
-
+    layout.checkHeight(y)
+    const height = Math.max(200, Math.ceil(y + padding))
+    const canvas = canvasModule.createCanvas(width * pixelRatio, height * pixelRatio)
+    const g = canvas.getContext('2d')
+    g.scale(pixelRatio, pixelRatio)
+    g.fillStyle = palette.bg
+    g.fillRect(0, 0, width, height)
+    g.fillStyle = palette.containerBg
+    g.fillRect(4, 4, width - 8, height - 8)
+    for (const op of ops) {
+        if (op.type === 'rect') {
+            g.fillStyle = op.color
+            g.fillRect(op.x, op.y, op.width, op.height)
+        } else if (op.type === 'image') g.drawImage(op.image, op.x, op.y, op.width, op.height)
+        else {
+            g.font = font(op.style)
+            g.fillStyle = op.style.color
+            g.textBaseline = 'alphabetic'
+            if (op.scale !== 1) {
+                g.save()
+                g.translate(op.x, op.y)
+                g.scale(op.scale, op.scale)
+                g.fillText(op.text, 0, 0)
+                g.restore()
+            } else g.fillText(op.text, op.x, op.y)
+        }
+    }
     return canvas.toBuffer('image/png')
 }
 
-/** 将 tokens 按宽度换行为多行以便逐行绘制 */
-function wrapTokens(ctx, tokens, maxWidth, fontSize, fontFamily) {
-    const lines = []
-    let cur = []
-    let curW = 0
-    for (const token of tokens) {
-        if (token.type === 'math' && token.image) {
-            const w = token._w || 40
-            if (curW + w > maxWidth && cur.length) {
-                lines.push(cur)
-                cur = [token]
-                curW = w
-            } else {
-                cur.push(token)
-                curW += w
-            }
-            continue
-        }
-        ctx.font = `${fontSize}px ${fontFamily}`
-        const w = ctx.measureText(token.text).width
-        if (curW + w > maxWidth && cur.length) {
-            lines.push(cur)
-            cur = [token]
-            curW = w
-        } else {
-            cur.push(token)
-            curW += w
-        }
-    }
-    if (cur.length) lines.push(cur)
-    return lines
-}
-
-/** 绘制一行 tokens，返回下一个 x 坐标 */
-function drawTokens(g, tokens, x, y, fontSize, fontFamily, codeFont) {
-    const baseline = y
-    for (const token of tokens) {
-        if (token.type === 'image') {
-            // 远程图片：无法同步绘制，这里输出占位文本
-            g.font = `${fontSize}px ${fontFamily}`
-            g.fillText(`[图片${token.text ? ':' + token.text : ''}]`, x, baseline)
-            x += g.measureText(`[图片]`).width + 10
-            continue
-        }
-        if (token.type === 'math') {
-            const img = token.image
-            if (img && img.width > 0) {
-                const h = fontSize * 1.1
-                const scale = h / img.height
-                const drawW = img.width * scale
-                g.drawImage(img, x, baseline - h * 0.78, drawW, h)
-                x += drawW + 4
-                continue
-            }
-            // 公式渲染失败：退化为文本
-            g.fillStyle = '#c0392b'
-            g.font = `${fontSize}px ${fontFamily}`
-            g.fillText(` ${token.text} `, x, baseline)
-            x += g.measureText(` ${token.text} `).width
-            continue
-        }
-        if (token.type === 'code') {
-            const codeFontSize = fontSize * 0.9
-            g.font = `${codeFontSize}px ${codeFont}`
-            const w = g.measureText(token.text).width
-            g.fillStyle = '#eceff4'
-            g.fillRect(x - 3, baseline - fontSize * 0.9, w + 6, fontSize * 1.2)
-            g.fillStyle = '#c0392b'
-            g.fillText(token.text, x, baseline)
-            x += w + 8
-            continue
-        }
-        if (token.type === 'link') {
-            g.fillStyle = '#0563c1'
-            g.font = `${fontSize}px ${fontFamily}`
-            g.fillText(token.text, x, baseline)
-            x += g.measureText(token.text).width
-            continue
-        }
-        // 文本 / 粗体 / 斜体
-        const isBold = token.type === 'bold'
-        const isItalic = token.type === 'italic'
-        g.font = `${isBold ? '600 ' : ''}${isItalic ? 'italic ' : ''}${fontSize}px ${fontFamily}`
-        g.fillStyle = isBold ? g.fillStyle : g.fillStyle
-        g.fillText(token.text, x, baseline)
-        x += g.measureText(token.text).width
-    }
-    return x
-}
-
-/**
- * 供 RenderService 使用的辅助：渲染单条 LaTeX 公式为图片
- * @returns {Promise<{image: Object, width: number, height: number}>}
- */
-export async function renderLatexToImageBuffer(latex, { canvasModule, fontSize = 18 }) {
+/** image 使用物理像素；width/height 为排版时的逻辑尺寸。 */
+export async function renderLatexToImageBuffer(
+    latex,
+    { canvasModule, fontSize = 18, pixelRatio = DEFAULT_PIXEL_RATIO }
+) {
     if (!canvasModule) throw new Error('Canvas 模块未加载')
-    const img = await renderLatexImage(latex, { canvasModule, baseFontSizePx: fontSize })
-    return { image: img, width: img.width, height: img.height }
+    if (pixelRatio !== 1 && pixelRatio !== 2) throw new RangeError('像素密度必须为 1 或 2')
+    return renderLatexImage(latex, { canvasModule, fontSize, pixelRatio })
 }
