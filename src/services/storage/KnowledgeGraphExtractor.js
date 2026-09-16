@@ -9,6 +9,7 @@ import { knowledgeGraphService } from './KnowledgeGraphService.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
 import { resolveClientTemperature } from '../llm/TemperatureResolver.js'
+import { callWithChannelDelegate } from '../llm/LlmDelegate.js'
 
 const logger = chatLogger
 
@@ -194,6 +195,29 @@ class KnowledgeGraphExtractor {
     }
 
     /**
+     * 带渠道重试与流式遵循的辅助发送。
+     * 通过 LlmService.getChatClient 构造出的客户端带 _channelInfo（含渠道 id），
+     * 此时改走 LlmDelegate 委托（渠道 advanced.streaming + 错误重试/渠道切换）；
+     * 否则回退为直连，保持与其他 SDK 客户端的兼容。
+     * @param {Object} client - LLM 客户端
+     * @param {Object} message - 用户消息
+     * @param {Object} requestOptions - 请求选项
+     * @param {string} [caller] - 调用者标签
+     * @returns {Promise<Object>} 客户端响应
+     */
+    async _sendWithRetry(client, message, requestOptions, caller = 'KGExtractor') {
+        const useDelegate = Boolean(client && typeof client._channelInfo?.id === 'string')
+        if (useDelegate) {
+            const delegated = await callWithChannelDelegate(message, {
+                ...requestOptions,
+                caller
+            })
+            return delegated.response
+        }
+        return await client.sendMessage(message, requestOptions)
+    }
+
+    /**
      * 提取实体
      */
     async extractEntities(conversationText, _scopeId) {
@@ -205,7 +229,8 @@ class KnowledgeGraphExtractor {
         try {
             const model = config.get('memory.model') || config.get('llm.defaultModel')
             const _temp = resolveClientTemperature(client, 0.3)
-            const response = await client.sendMessage(
+            const response = await this._sendWithRetry(
+                client,
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 {
                     model,
@@ -239,7 +264,8 @@ class KnowledgeGraphExtractor {
         try {
             const model = config.get('memory.model') || config.get('llm.defaultModel')
             const _temp = resolveClientTemperature(client, 0.3)
-            const response = await client.sendMessage(
+            const response = await this._sendWithRetry(
+                client,
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 {
                     model,

@@ -7,6 +7,7 @@ import config from '../../../config/config.js'
 import { memoryService } from './MemoryService.js'
 import { callMemoryLLM, formatMemoryTime } from './llmHelper.js'
 import { MemoryCategory, MemorySource, getCategoryLabel } from './MemoryTypes.js'
+import { preserveTargetId } from '../../core/platform/StandardBotIdentity.js'
 
 const logger = chatLogger
 
@@ -509,8 +510,15 @@ class MemorySummarizer {
             result.extractedCount = extracted.length
             try {
                 const { knowledgeGraphExtractor } = await import('../storage/KnowledgeGraphExtractor.js')
-                const scopeId = groupId ? `group:${groupId}:user:${userId}` : `user:${userId}`
-                await knowledgeGraphExtractor.extractFromConversation(messages, scopeId, { groupId })
+                const graphUserId = String(preserveTargetId(globalThis.Bot, userId) ?? userId)
+                const graphGroupId =
+                    groupId === null || groupId === undefined || groupId === ''
+                        ? null
+                        : String(preserveTargetId(globalThis.Bot, groupId) ?? groupId)
+                const scopeId = graphGroupId ? `group:${graphGroupId}:user:${graphUserId}` : `user:${graphUserId}`
+                await knowledgeGraphExtractor.extractFromConversation(messages, scopeId, {
+                    groupId: graphGroupId
+                })
                 result.graphExtracted = true
             } catch (graphErr) {
                 logger.debug('[MemorySummarizer] 知识图谱提取失败:', graphErr.message)

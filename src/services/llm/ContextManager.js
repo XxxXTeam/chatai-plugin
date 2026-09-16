@@ -386,15 +386,40 @@ export class ContextManager {
             const groupId = extractConversationGroupId(conversationId)
             const client = await LlmService.getChatClient({ model, groupId: groupId || undefined })
             const _temp = resolveClientTemperature(client, 0.2)
-            const result = await client.sendMessage(
-                { role: 'user', content: [{ type: 'text', text: prompt }] },
-                {
-                    model,
-                    maxToken: options.maxTokens || 400,
-                    ...(_temp !== undefined ? { temperature: _temp } : {}),
-                    disableHistorySave: true
+
+            const cacheGroupId = groupId || undefined
+            const hasInternalClient = typeof client?._channelInfo?.id === 'string'
+            const useDelegate = hasInternalClient && typeof client.sendMessageWithHistory === 'function'
+            const summonRequestOptions = {
+                model,
+                maxToken: options.maxTokens || 400,
+                ...(_temp !== undefined ? { temperature: _temp } : {}),
+                disableHistorySave: true,
+                ...(cacheGroupId ? { groupId: cacheGroupId } : {})
+            }
+
+            let result
+            if (useDelegate) {
+                const { callWithChannelDelegate } = await import('./LlmDelegate.js')
+                try {
+                    const delegated = await callWithChannelDelegate(
+                        { role: 'user', content: [{ type: 'text', text: prompt }] },
+                        { ...summonRequestOptions, caller: 'ContextSummarize' }
+                    )
+                    result = delegated.response
+                } catch (delegatedError) {
+                    logger.debug('[ContextManager] 委托调用失败，回退直连:', delegatedError.message)
+                    result = await client.sendMessage(
+                        { role: 'user', content: [{ type: 'text', text: prompt }] },
+                        summonRequestOptions
+                    )
                 }
-            )
+            } else {
+                result = await client.sendMessage(
+                    { role: 'user', content: [{ type: 'text', text: prompt }] },
+                    summonRequestOptions
+                )
+            }
             const summaryText = result.contents?.[0]?.text?.trim()
             if (!summaryText) return false
 
@@ -1903,15 +1928,38 @@ export class ContextManager {
                 groupId: groupId || undefined
             })
             const _temp2 = resolveClientTemperature(client, 0.2)
-            const result = await client.sendMessage(
-                { role: 'user', content: [{ type: 'text', text: prompt }] },
-                {
-                    model,
-                    maxToken: 300,
-                    ...(_temp2 !== undefined ? { temperature: _temp2 } : {}),
-                    disableHistorySave: true
+
+            const compressRequestOptions = {
+                model,
+                maxToken: 300,
+                ...(_temp2 !== undefined ? { temperature: _temp2 } : {}),
+                disableHistorySave: true,
+                ...(groupId || undefined ? { groupId } : {})
+            }
+            const useCompressDelegate =
+                typeof client?.sendMessageWithHistory === 'function' && typeof client?._channelInfo?.id === 'string'
+            let result
+            if (useCompressDelegate) {
+                const { callWithChannelDelegate } = await import('./LlmDelegate.js')
+                try {
+                    const delegated = await callWithChannelDelegate(
+                        { role: 'user', content: [{ type: 'text', text: prompt }] },
+                        { ...compressRequestOptions, caller: 'ContextCompress' }
+                    )
+                    result = delegated.response
+                } catch (delegatedError) {
+                    logger.debug('[ContextManager] 压缩委托调用失败，回退直连:', delegatedError.message)
+                    result = await client.sendMessage(
+                        { role: 'user', content: [{ type: 'text', text: prompt }] },
+                        compressRequestOptions
+                    )
                 }
-            )
+            } else {
+                result = await client.sendMessage(
+                    { role: 'user', content: [{ type: 'text', text: prompt }] },
+                    compressRequestOptions
+                )
+            }
             const summaryText = result.contents?.[0]?.text?.trim()
 
             if (summaryText) {

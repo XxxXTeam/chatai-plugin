@@ -301,14 +301,16 @@ export class MemoryManager {
             const channelInfo = client._channelInfo || {}
             const model = channelInfo.model || config.get('llm.defaultModel')
             const _temp = resolveClientTemperature(client, 0.3)
-            const result = await client.sendMessage(
+            const result = await this._sendMemoryLlm(
+                client,
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 {
                     model,
                     maxToken: 600,
                     disableHistorySave: true,
                     ...(_temp !== undefined ? { temperature: _temp } : {})
-                }
+                },
+                'MemoryGroupContext'
             )
 
             const responseText = result.contents?.[0]?.text?.trim() || ''
@@ -750,14 +752,16 @@ ${dialogText}
             const channelInfo2 = client._channelInfo || {}
             const model2 = channelInfo2.model || config.get('llm.defaultModel')
             const _temp2 = resolveClientTemperature(client, 0.3)
-            const result = await client.sendMessage(
+            const result = await this._sendMemoryLlm(
+                client,
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 {
                     model: model2,
                     maxToken: 500,
                     disableHistorySave: true,
                     ...(_temp2 !== undefined ? { temperature: _temp2 } : {})
-                }
+                },
+                'MemoryAnalyzeUser'
             )
 
             const responseText = result.contents?.[0]?.text?.trim() || ''
@@ -951,14 +955,16 @@ ${existingMemoryList || '暂无'}
             const channelInfo3 = client._channelInfo || {}
             const model3 = channelInfo3.model || config.get('llm.defaultModel')
             const _temp3 = resolveClientTemperature(client, 0.3)
-            const result = await client.sendMessage(
+            const result = await this._sendMemoryLlm(
+                client,
                 { role: 'user', content: [{ type: 'text', text: mergePrompt }] },
                 {
                     model: model3,
                     maxToken: 400,
                     disableHistorySave: true,
                     ...(_temp3 !== undefined ? { temperature: _temp3 } : {})
-                }
+                },
+                'MemoryAutoExtract'
             )
 
             const responseText = result.contents?.[0]?.text?.trim()
@@ -995,6 +1001,27 @@ ${existingMemoryList || '暂无'}
             logger.warn('[MemoryManager] 自动提取记忆失败:', error.message)
         }
         return null
+    }
+
+    /**
+     * 带渠道委托的旁路调用：遵循渠道 advanced.streaming 并在失败时做渠道切换重试。
+     * 仅对内部统一客户端（同时具备 sendMessageWithHistory 与渠道归属 _channelInfo）
+     * 启用委托；mock/外部 SDK 客户端保持原直连语义，failed 时不改变行为。
+     * @param {Object} client - LLM 客户端
+     * @param {Object} message - 用户消息（内部格式）
+     * @param {Object} requestOptions - 请求选项（含 model/maxToken/temperature 等）
+     * @param {string} caller - 调用者标签
+     * @returns {Promise<Object>} 客户端响应
+     */
+    async _sendMemoryLlm(client, message, requestOptions, caller) {
+        const isInternalClient =
+            typeof client?.sendMessageWithHistory === 'function' && typeof client?._channelInfo?.id === 'string'
+        if (isInternalClient) {
+            const { callWithChannelDelegate } = await import('../llm/LlmDelegate.js')
+            const delegated = await callWithChannelDelegate(message, { ...requestOptions, caller })
+            return delegated.response
+        }
+        return await client.sendMessage(message, requestOptions)
     }
 
     /**
@@ -1420,14 +1447,16 @@ ${existingMemoryList || '暂无'}
             const usedModel = channelInfo.model || config.get('llm.defaultModel')
 
             const _temp4 = resolveClientTemperature(client, 0.3)
-            const result = await client.sendMessage(
+            const result = await this._sendMemoryLlm(
+                client,
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 {
                     model: usedModel,
                     maxToken: 800,
                     disableHistorySave: true,
                     ...(_temp4 !== undefined ? { temperature: _temp4 } : {})
-                }
+                },
+                'MemoryTimeRange'
             )
 
             const responseText = result.contents?.[0]?.text?.trim() || ''

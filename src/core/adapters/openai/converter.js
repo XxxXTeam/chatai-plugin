@@ -3,7 +3,19 @@ import {
     registerFromChaiteToolConverter,
     registerIntoChaiteConverter
 } from '../../utils/converter.js'
-import { toOpenAIChatTool } from '../tooling.js'
+import { toOpenAIChatTool, normalizeAnyToolCallId } from '../tooling.js'
+
+/**
+ * 归一化工具调用 ID 为字符串。
+ * assistant 侧 tool_calls[].id 与 tool 侧 tool_call_id 都朝外发送，
+ * OpenAI 兼容端点要求二者必须是字符串；统一在出口 String 化，
+ * 数字 id 不再透传（否则触发 400 pydantic 校验 / 500 Go unmarshal 失败）。
+ * @param {*} toolCallId - 上游工具调用 ID
+ * @returns {string} 归一化后的字符串 ID
+ */
+function normalizeToolCallId(toolCallId) {
+    return normalizeAnyToolCallId(toolCallId)
+}
 
 function parseToolArguments(args, fallbackKey = 'input', warnOnFallback = true) {
     if (args === undefined || args === null) return {}
@@ -62,7 +74,7 @@ registerFromChaiteConverter('openai', source => {
             if (hasToolCalls) {
                 msg.tool_calls = source.toolCalls.map(t => {
                     const toolCall = {
-                        id: t.id,
+                        id: normalizeToolCallId(t.id),
                         type: t.type || 'function',
                         function: {
                             arguments:
@@ -156,7 +168,7 @@ registerFromChaiteConverter('openai', source => {
                 let toolName = tcr.name
                 if (!toolName && tcr.tool_call_id) {
                     // 尝试从 tool_call_id 中提取工具名（某些格式如 call_xxx_toolname）
-                    const match = tcr.tool_call_id.match(/(?:call_)?(?:[a-zA-Z0-9]+_)?(.+)$/)
+                    const match = String(tcr.tool_call_id).match(/(?:call_)?(?:[a-zA-Z0-9]+_)?(.+)$/)
                     if (match && match[1] && !match[1].startsWith('call')) {
                         toolName = match[1]
                     }
@@ -164,9 +176,17 @@ registerFromChaiteConverter('openai', source => {
                 // 确保 name 不为空（Gemini API 强制要求）
                 toolName = toolName || 'tool_result'
 
+                // OpenAIClient.js:176-195 的清理/匹配逻辑按值比较 Set 成员，
+                // tool role 消息的 tool_call_id 必须与 assistant 侧 tool_calls[].id 一一对应。
+                // 参与比较前统一为字符串，避免数字型 id 导致配对失败或类型错误
+                const toolCallId =
+                    tcr.tool_call_id === undefined || tcr.tool_call_id === null || tcr.tool_call_id === ''
+                        ? ''
+                        : String(tcr.tool_call_id)
+
                 return {
                     role: 'tool',
-                    tool_call_id: tcr.tool_call_id,
+                    tool_call_id: toolCallId,
                     content: tcr.content,
                     name: toolName
                 }
@@ -250,7 +270,7 @@ registerIntoChaiteConverter('openai', msg => {
                     let args = t.function?.arguments ?? t.custom?.input
                     args = parseToolArguments(args, 'input', !t.custom)
                     const toolCall = {
-                        id: t.id,
+                        id: normalizeToolCallId(t.id),
                         type: 'function',
                         function: {
                             name: t.function?.name || t.custom?.name,

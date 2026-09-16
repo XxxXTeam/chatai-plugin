@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import config from '../../../config/config.js'
 import { chatLogger as logger } from '../../core/utils/logger.js'
-import { getToolDefinitionName, getToolIdentity } from '../../core/adapters/tooling.js'
+import { getToolDefinitionName, getToolIdentity, normalizeAnyToolCallId } from '../../core/adapters/tooling.js'
 import { toolFilterService } from './ToolFilterService.js'
 import { resolveToolPermission } from './ToolPermission.js'
 import { StandardBotApi } from '../../core/platform/index.js'
@@ -15,6 +15,15 @@ const SESSION_BYPASS_TTL_MS = 2 * 60 * 60 * 1000
 
 /** 会话放行表的容量上限，key 随用户×群×会话×工具组合增长，需封顶 */
 const MAX_SESSION_BYPASS_ENTRIES = 2000
+
+/**
+ * 归一化工具调用 ID：审批记录与拦截结果的 tool_call_id 写入历史前必须为字符串，
+ * 否则数字型 ID 在下一轮请求会被 OpenAI 兼容端点拒绝（400/500）。
+ * 与发送出口共用 tooling.js 的 normalizeAnyToolCallId，口径一致。
+ * @param {*} toolCallId - 上游工具调用 ID
+ * @returns {string} 合法字符串 ID
+ */
+const normalizeApprovalToolCallId = normalizeAnyToolCallId
 
 const DEFAULT_LOW_RISK_TOOLS = new Set([
     'get_time',
@@ -135,7 +144,7 @@ class ToolApprovalService {
             argsParseError = argsParseError || 'arguments 必须是 JSON 对象'
             args = { _raw: args }
         }
-        return { id: toolCall.id || crypto.randomUUID(), name, args, argsParseError, raw: toolCall }
+        return { id: normalizeApprovalToolCallId(toolCall.id), name, args, argsParseError, raw: toolCall }
     }
 
     classifyRisk(toolName, tool = null) {
@@ -186,7 +195,7 @@ class ToolApprovalService {
         }
         return {
             toolResult: {
-                tool_call_id: toolCall.id || crypto.randomUUID(),
+                tool_call_id: normalizeApprovalToolCallId(toolCall.id),
                 content,
                 type: 'tool',
                 name,

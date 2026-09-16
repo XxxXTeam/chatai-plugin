@@ -1,3 +1,44 @@
+import crypto from 'node:crypto'
+
+/**
+ * 生成确定性的工具调用 ID（供无原生 id 的协议使用，如 Gemini functionCall）。
+ * 使用工具名 + 参数的稳定哈希，同一轮内重复调用会得到相同 ID，
+ * 且不会产生数字型 ID（OpenAI 兼容端点要求 id 必须为字符串）。
+ * @param {string} toolName - 工具名
+ * @param {unknown} args - 工具调用参数
+ * @returns {string} 形如 call_<工具名>_<短哈希> 的确定性 ID
+ */
+export function generateDeterministicToolCallId(toolName, args) {
+    const namePart = String(toolName || 'tool')
+        .replace(/[^a-zA-Z0-9_.-]/g, '_')
+        .slice(0, 40)
+    let serialized = ''
+    if (typeof args === 'string') {
+        serialized = args
+    } else if (args !== undefined && args !== null) {
+        try {
+            serialized = JSON.stringify(args)
+        } catch {
+            serialized = String(args)
+        }
+    }
+    return `call_${namePart}_${crypto.createHash('sha256').update(serialized).digest('hex').slice(0, 8)}`
+}
+
+/**
+ * 归一化工具调用 ID：任何来源的 ID 在本插件内部统一保持字符串。
+ * 数字 id 不再透传，否则下一轮请求会在 OpenAI 兼容端点触发 400/500。
+ * assistant 侧 tool_calls[].id 与 tool 侧 tool_call_id 走下同一条归一化，
+ * 值经 String() 后类型也一致，历史配对不受影响。
+ * @param {*} toolCallId - 上游工具调用 ID（string/number/空值）
+ * @returns {string} 合法 ID；空值兜底为随机 UUID 字符串
+ */
+export function normalizeAnyToolCallId(toolCallId) {
+    if (typeof toolCallId === 'string' && toolCallId.trim()) return toolCallId
+    if (toolCallId === undefined || toolCallId === null || toolCallId === '') return crypto.randomUUID()
+    return String(toolCallId)
+}
+
 export function getToolDefinitionName(tool) {
     return tool?.function?.name || tool?.custom?.name || tool?.name || ''
 }

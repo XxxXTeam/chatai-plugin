@@ -12,6 +12,7 @@
 import { databaseService, safeParse } from './DatabaseService.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import { isDeepStrictEqual } from 'node:util'
+import { preserveTargetId } from '../../core/platform/StandardBotIdentity.js'
 import crypto from 'crypto'
 
 const logger = chatLogger
@@ -1237,12 +1238,34 @@ class KnowledgeGraphService {
     }
 
     /**
+     * 归一化图谱作用域 ID 中的用户/群标识。
+     *
+     * QQBot 适配器下同名用户在不同协议里主体 ID 不同（OpenID vs 数字 QQ），
+     * preserveTargetId 保证 QQBot 的任意 ID 都以字符串原样保留，其他适配器的
+     * 纯数字 ID 归一为 number，避免同一实体裂出多套作用域节点。
+     * 无 bot 上下文时按原始值处理（保持既有行为）。
+     *
+     * @param {string|number} rawUserId - 原始用户 ID
+     * @param {string|number|null} rawGroupId - 原始群 ID
+     * @returns {{userId: string, groupId: string|null}} 归一化后的作用域输入
+     */
+    _normalizeScopeTarget(userId, groupId) {
+        const bot = globalThis.Bot
+        const normalizedUserId = String(preserveTargetId(bot, userId) ?? userId)
+        const normalizedGroupId =
+            groupId === null || groupId === undefined || groupId === ''
+                ? null
+                : String(preserveTargetId(bot, groupId) ?? groupId)
+        return { userId: normalizedUserId, groupId: normalizedGroupId }
+    }
+
+    /**
      * 获取用户的知识上下文（用于对话）
      */
     getKnowledgeContext(userId, groupId = null, options = {}) {
-        const normalizedUserId = requiredString(userId, 'userId')
-        const normalizedGroupId =
-            groupId === null || groupId === undefined || groupId === '' ? null : requiredString(groupId, 'groupId')
+        const scopeTarget = this._normalizeScopeTarget(userId, groupId)
+        const normalizedUserId = requiredString(scopeTarget.userId, 'userId')
+        const normalizedGroupId = scopeTarget.groupId === null ? null : requiredString(scopeTarget.groupId, 'groupId')
         if (!isPlainObject(options)) {
             throw new KnowledgeGraphError('options 必须为 JSON 对象')
         }

@@ -1,11 +1,29 @@
-import crypto from 'node:crypto'
 import {
     registerFromChaiteConverter,
     registerFromChaiteToolConverter,
     registerIntoChaiteConverter
 } from '../../utils/converter.js'
-import { toGeminiTool } from '../tooling.js'
+import { toGeminiTool, generateDeterministicToolCallId } from '../tooling.js'
 import { mcpContentBlockToText } from '../../utils/toolResult.js'
+
+/**
+ * 从 tool 消息的外层字段推导工具名。
+ * tcr.name 由 executeToolCalls 的 toolName 计算写入，正常流程必有值；
+ * 历史恢复或上游数据缺失时按外层层级兜底，绝不能把 functionResponse.name
+ * 留空——Gemini 端点会直接拒绝
+ * （"function_response.name: Name cannot be empty"）。
+ *
+ * @param {Object} tcr - tool 消息中的单条工具结果
+ * @param {Object} [sourceMsg] - tool 消息本体（含外层 name/id 字段）
+ * @returns {string} 永远非空的工具名
+ */
+function resolveToolResultName(tcr, sourceMsg) {
+    const candidates = [tcr?.name, tcr?.functionName, sourceMsg?.name]
+    for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
+    }
+    return 'unknown_tool'
+}
 
 function parseFunctionArgs(args) {
     if (args === undefined || args === null) return {}
@@ -142,46 +160,49 @@ registerFromChaiteConverter('gemini', source => {
             }
         }
         case 'tool': {
-            return source.content
-                .filter(tcr => tcr.name && tcr.name.trim())
-                .map(tcr => {
-                    let responseContent = tcr.content || ''
+            return source.content.map(tcr => {
+                let responseContent = tcr.content || ''
 
-                    if (typeof responseContent === 'string' && responseContent.startsWith('{')) {
-                        try {
-                            responseContent = JSON.parse(responseContent)
-                        } catch {
-                            // 保留兼容文本。
-                        }
+                if (typeof responseContent === 'string' && responseContent.startsWith('{')) {
+                    try {
+                        responseContent = JSON.parse(responseContent)
+                    } catch {
+                        // 保留兼容文本。
                     }
+                }
 
-                    const response =
-                        responseContent && typeof responseContent === 'object'
-                            ? { ...responseContent }
-                            : { content: responseContent }
-                    if (Array.isArray(tcr.mcpContent)) {
-                        response.mcpContent = tcr.mcpContent.map(block => ({
-                            type: block?.type || 'unknown',
-                            text: mcpContentBlockToText(block)
-                        }))
-                    }
-                    if (tcr.structuredContent !== undefined) {
-                        response.structuredContent = tcr.structuredContent
-                    }
-                    if (tcr.isError === true) response.isError = true
+                const response =
+                    responseContent && typeof responseContent === 'object'
+                        ? { ...responseContent }
+                        : { content: responseContent }
+                if (Array.isArray(tcr.mcpContent)) {
+                    response.mcpContent = tcr.mcpContent.map(block => ({
+                        type: block?.type || 'unknown',
+                        text: mcpContentBlockToText(block)
+                    }))
+                }
+                if (tcr.structuredContent !== undefined) {
+                    response.structuredContent = tcr.structuredContent
+                }
+                if (tcr.isError === true) response.isError = true
 
-                    return {
-                        role: 'function',
-                        parts: [
-                            {
-                                functionResponse: {
-                                    name: tcr.name,
-                                    response
-                                }
+                // functionResponse.name 必须非空，否则 Gemini 端点直接 400；
+                // name 字段本身在历史持久化/恢复链路中可能丢失，因此绝不能依赖
+                // 过滤器丢弃无 name 结果（原实现会静默丢 part，导致模型看不到结果）
+                const toolResultName = resolveToolResultName(tcr, source)
+
+                return {
+                    role: 'function',
+                    parts: [
+                        {
+                            functionResponse: {
+                                name: toolResultName,
+                                response
                             }
-                        ]
-                    }
-                })
+                        }
+                    ]
+                }
+            })
         }
         default: {
             throw new Error(`Unknown role: ${source.role}`)
@@ -210,8 +231,11 @@ registerIntoChaiteConverter('gemini', response => {
             })
         }
         if (part.functionCall) {
+            // Gemini 原生 functionCall 无 id，使用确定性 ID：
+            // 同一调用在重试/重放/历史恢复后 ID 不变，不会漂移；
+            // 也满足 OpenAI 兼容端点 id 必须为字符串的要求（不会产生数字型 id）
             toolCalls.push({
-                id: crypto.randomUUID(),
+                id: generateDeterministicToolCallId(part.functionCall.name, part.functionCall.args),
                 type: 'function',
                 function: {
                     name: part.functionCall.name,

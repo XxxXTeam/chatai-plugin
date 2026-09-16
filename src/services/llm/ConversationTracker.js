@@ -242,13 +242,53 @@ class ConversationTrackerService {
                 preset: null,
                 channel: { advanced: { llm: channel.advanced?.llm || {} }, overrides: channel.overrides || {} }
             })
-            const response = await client.sendMessageWithHistory(messages, {
-                model: trackingModel,
-                maxToken: 10,
-                ...(_trackTemp !== undefined ? { temperature: _trackTemp } : {})
-            })
 
-            const answer = (response?.content?.find(c => c.type === 'text')?.text || '').toLowerCase().trim()
+            /*
+             * 判定是轻量旁路调用：优先接管统一委托（渠道 advanced.streaming 遵循 + 失败重试/切渠道），
+             * 异常时回退为原有直连路径，两层都失败才按 false（放弃判定）处理。
+             */
+            let response
+            try {
+                const { callWithChannelDelegate } = await import('./LlmDelegate.js')
+                const systemText =
+                    typeof messages.find(m => m.role === 'system')?.content === 'string'
+                        ? messages.find(m => m.role === 'system').content
+                        : ''
+                const rawUserContent = messages.find(m => m.role === 'user')?.content
+                if (rawUserContent === undefined || rawUserContent === null || rawUserContent === '') {
+                    throw new Error('[ConversationTracker] 缺少用户消息')
+                }
+                const messageContent = Array.isArray(rawUserContent)
+                    ? rawUserContent
+                    : [{ type: 'text', text: String(rawUserContent) }]
+
+                const delegated = await callWithChannelDelegate(
+                    { role: 'user', content: messageContent },
+                    {
+                        model: trackingModel,
+                        maxToken: 10,
+                        ...(_trackTemp !== undefined ? { temperature: _trackTemp } : {}),
+                        ...(systemText ? { systemOverride: systemText } : {}),
+                        caller: 'ConversationTracker'
+                    }
+                )
+                response = delegated.response
+            } catch (delegateError) {
+                logger.debug('[ConversationTracker] LlmDelegate 失败，回退直连:', delegateError.message)
+                response = await client.sendMessageWithHistory(messages, {
+                    model: trackingModel,
+                    maxToken: 10,
+                    ...(_trackTemp !== undefined ? { temperature: _trackTemp } : {})
+                })
+            }
+
+            const answer = (
+                response?.content?.find(c => c.type === 'text')?.text ||
+                response?.contents?.[0]?.text ||
+                ''
+            )
+                .toLowerCase()
+                .trim()
             return answer === 'true' || answer?.includes('true')
         } catch (error) {
             logger.error('[ConversationTracker] AI判断失败:', error.message)

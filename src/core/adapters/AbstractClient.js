@@ -11,7 +11,7 @@ import DefaultHistoryManager from '../utils/history.js'
 import { asyncLocalStorage, getKey } from '../utils/index.js'
 import { logService } from '../../services/stats/LogService.js'
 import { toolApprovalService } from '../../services/tools/ToolApprovalService.js'
-import { attachToolMetadata, getToolDefinitionName, getToolIdentity } from './tooling.js'
+import { attachToolMetadata, getToolDefinitionName, getToolIdentity, normalizeAnyToolCallId } from './tooling.js'
 import { normalizeToolExecutionResult, sanitizeToolResultForLog } from '../utils/toolResult.js'
 
 /**
@@ -20,6 +20,15 @@ import { normalizeToolExecutionResult, sanitizeToolResultForLog } from '../utils
 function generateToolId(prefix = 'tool') {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 }
+
+/**
+ * 归一化工具调用 ID：任何来源的工具调用 ID 写入结果/历史前统一为字符串。
+ * 与发送出口（openai/gemini 转换器）共用 tooling.js 的同一实现，保证
+ * assistant 侧 id 与 tool 侧 tool_call_id 的字符串化口径一致。
+ * @param {*} toolCallId - 上游工具调用 ID（string/number/空值）
+ * @returns {string} 合法 ID；空值兜底为随机 UUID 字符串
+ */
+const normalizeToolCallIdForResult = normalizeAnyToolCallId
 
 /**
  * @param {any} args - 参数
@@ -2159,7 +2168,7 @@ export class AbstractClient {
                     ? '工具未执行：工具名称缺失'
                     : `工具未执行：未知或无法唯一定位工具 ${displayName}`
             toolCallResults.push({
-                tool_call_id: toolCall?.id || crypto.randomUUID(),
+                tool_call_id: normalizeToolCallIdForResult(toolCall?.id),
                 content: JSON.stringify({
                     status: 'error',
                     tool: displayName,
@@ -2246,7 +2255,7 @@ export class AbstractClient {
                 } else {
                     const fcName = toolCall.function?.name || toolCall.name || 'unknown_tool'
                     toolCallResults.push({
-                        tool_call_id: toolCall.id,
+                        tool_call_id: normalizeToolCallIdForResult(toolCall.id),
                         content: `执行失败: ${result.reason?.message || 'Unknown error'}`,
                         type: 'tool',
                         name: fcName
@@ -2308,7 +2317,7 @@ export class AbstractClient {
                 )
                 return {
                     toolResult: {
-                        tool_call_id: toolCall.id || crypto.randomUUID(),
+                        tool_call_id: normalizeToolCallIdForResult(toolCall.id),
                         content: normalized.providerContent,
                         type: 'tool',
                         name: toolName,
@@ -2339,7 +2348,7 @@ export class AbstractClient {
             )
             return {
                 toolResult: {
-                    tool_call_id: toolCall.id || crypto.randomUUID(),
+                    tool_call_id: normalizeToolCallIdForResult(toolCall.id),
                     content: normalized.providerContent,
                     type: 'tool',
                     name: toolName,
@@ -2376,7 +2385,7 @@ export class AbstractClient {
             )
             return {
                 toolResult: {
-                    tool_call_id: toolCall.id || crypto.randomUUID(),
+                    tool_call_id: normalizeToolCallIdForResult(toolCall.id),
                     content: normalized.providerContent,
                     type: 'tool',
                     name: toolName,
@@ -2410,7 +2419,7 @@ export class AbstractClient {
         })
         return {
             toolResult: {
-                tool_call_id: toolCall.id || crypto.randomUUID(),
+                tool_call_id: normalizeToolCallIdForResult(toolCall.id),
                 content: normalized.providerContent,
                 type: 'tool',
                 name: toolName,

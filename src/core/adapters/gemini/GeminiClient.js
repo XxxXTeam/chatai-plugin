@@ -11,7 +11,7 @@ import {
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
 import { statsService } from '../../../services/stats/StatsService.js'
-import { resolveToolChoice } from '../tooling.js'
+import { resolveToolChoice, generateDeterministicToolCallId } from '../tooling.js'
 
 const logger = chatLogger
 
@@ -401,7 +401,8 @@ export class GeminiClient extends AbstractClient {
                     }
                     for (const functionCall of functionCalls) {
                         toolCalls.push({
-                            id: crypto.randomUUID(),
+                            // 确定性 ID：流式与非流式路径一致，重试/重放不漂移，且恒为字符串
+                            id: generateDeterministicToolCallId(functionCall.name, functionCall.args),
                             type: 'function',
                             function: {
                                 name: functionCall.name,

@@ -161,8 +161,11 @@ function validateAndCleanMessages(messages) {
 
         const seenIds = new Set()
         const toolCalls = message.tool_calls.filter(toolCall => {
-            if (!toolCall?.id || seenIds.has(toolCall.id)) return false
-            seenIds.add(toolCall.id)
+            // Set 匹配按值比较：assistant 侧在转换出口已统一为字符串，
+            // 此处把 id 也 String 化，保证与 tool 消息的 tool_call_id 在同类型下比较
+            const normalizedId = toolCall?.id === undefined || toolCall?.id === null ? '' : String(toolCall.id)
+            if (!normalizedId || seenIds.has(normalizedId)) return false
+            seenIds.add(normalizedId)
             return true
         })
         return toolCalls.length === message.tool_calls.length ? message : { ...message, tool_calls: toolCalls }
@@ -565,7 +568,11 @@ export class OpenAIClient extends AbstractClient {
                 return [
                     {
                         type: 'function_call_output',
-                        call_id: message.tool_call_id,
+                        // Responses API 要求 call_id 为字符串，与 Chat Completions 转换出口保持一致
+                        call_id:
+                            message.tool_call_id === undefined || message.tool_call_id === null
+                                ? ''
+                                : String(message.tool_call_id),
                         output:
                             typeof message.content === 'string'
                                 ? message.content
@@ -887,6 +894,8 @@ export class OpenAIClient extends AbstractClient {
             return existing
         }
 
+        // index 兜底 ID 只作内部 key 使用；OpenAI 兼容端点要求 id 为字符串，
+        // String() 保证最终 toolCalls[].id 恒为字符串（不会产生数字型 id）
         const id =
             existingKey ||
             event.item_id ||
@@ -944,12 +953,13 @@ export class OpenAIClient extends AbstractClient {
     }
 
     getResponsesOutputItemKey(item, event = {}) {
+        // key 统一 String 化：OpenAI 兼容端点校验 id 必须为字符串
         return (
-            item?.id ||
-            item?.call_id ||
-            event.item_id ||
-            event.item?.id ||
-            event.item?.call_id ||
+            String(item?.id ?? '') ||
+            String(item?.call_id ?? '') ||
+            String(event.item_id ?? '') ||
+            String(event.item?.id ?? '') ||
+            String(event.item?.call_id ?? '') ||
             String(event.output_index ?? '')
         )
     }

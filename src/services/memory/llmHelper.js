@@ -94,6 +94,29 @@ export async function callMemoryLLM(llmClient, prompt, options = {}) {
     const resolvedTemp = resolveClientTemperature(llmClient, temperature)
     const tempOpts = resolvedTemp !== undefined ? { temperature: resolvedTemp } : {}
 
+    /*
+     * 内部统一客户端（LlmService 构造）走 LlmDelegate 委托：
+     * 遵循渠道 advanced.streaming 配置并在失败时做渠道上报/切换重试，
+     * 避免记忆模块在渠道故障或流式配置不匹配时直接失败。
+     */
+    const isInternalClient =
+        typeof llmClient.sendMessageWithHistory === 'function' && typeof llmClient._channelInfo?.id === 'string'
+    if (isInternalClient) {
+        const { callWithChannelDelegate } = await import('../llm/LlmDelegate.js')
+        const model = llmClient._channelInfo?.model || options.model || ''
+        const delegated = await callWithChannelDelegate(
+            { role: 'user', content: [{ type: 'text', text: prompt }] },
+            {
+                ...(model ? { model } : {}),
+                maxToken: maxTokens,
+                ...tempOpts,
+                caller
+            }
+        )
+        logger.debug(`[${caller}] LlmDelegate 调用完成: streams=${delegated.stream}, tries=${delegated.tries}`)
+        return extractMemoryLLMText(delegated.response)
+    }
+
     try {
         // 方式1: 内部统一客户端。该客户端同时也有 sendMessage，必须优先选择此契约；
         // 否则字符串 prompt 会被当作内部消息对象展开，且 contents 响应无法被旧逻辑读取。

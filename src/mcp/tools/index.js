@@ -31,7 +31,8 @@ const toolModules = {
     imageGen: { file: './imageGen.js', export: 'imageGenTools' },
     qzone: { file: './qzone.js', export: 'qzoneTools' },
     emoji: { file: './emoji.js', export: 'emojiTools' },
-    skills: { file: './skills.js', export: 'skillsTools' }
+    skills: { file: './skills.js', export: 'skillsTools' },
+    knowledgeGraph: { file: './knowledgeGraph.js', export: 'knowledgeGraphTools' }
 }
 
 // 类别元信息
@@ -133,6 +134,12 @@ const categoryMeta = {
         name: 'Skills 技能管理',
         description: '查看、加载、卸载文档技能。模型需要了解或启用某个 skill 时调用',
         icon: 'BookOpen'
+    },
+    knowledgeGraph: {
+        name: '知识图谱',
+        description:
+            '查询与维护知识图谱（实体、关系、子图）。需要回忆或记录用户/群的结构化知识（人际关系、喜好、事件等）时调用',
+        icon: 'Network'
     }
 }
 
