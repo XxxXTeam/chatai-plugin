@@ -158,6 +158,7 @@ class MemorySummarizer {
         const summaryOptions = { groupId: undefined, useLLM: true, model: undefined, ...options }
         const groupId = hasGroupId ? summaryOptions.groupId : undefined
         const { useLLM = true, model } = summaryOptions
+        let cleanupResult = null
 
         try {
             const result = {
@@ -169,6 +170,7 @@ class MemorySummarizer {
                 afterCount: 0,
                 mergedCount: 0,
                 removedCount: 0,
+                cleanedCount: 0,
                 byCategory: {}
             }
 
@@ -178,6 +180,20 @@ class MemorySummarizer {
             result.beforeCount = mergeResult.originalCount
             result.mergedCount = mergeResult.mergedCount
             result.removedCount = mergeResult.deletedCount
+
+            // 清理低质量记忆（confidence 过低 / 过期 / 过老 / 过短）。
+            // 显式 cleanup === true 才执行：直接用服务的能力（如对话结束链、测试）保持
+            // 既有语义，前端"总结整理"按钮经 API 传 cleanup=true 时附带清理
+            if (summaryOptions.cleanup === true) {
+                try {
+                    cleanupResult = await this.cleanupMemories(userId, {
+                        ...(hasGroupId ? { groupId } : {})
+                    })
+                    result.cleanedCount = cleanupResult.removedCount || 0
+                } catch (cleanupError) {
+                    logger.warn('[MemorySummarizer] 清理步骤失败，继续总结:', cleanupError.message)
+                }
+            }
 
             // 2. 如果启用 LLM，对每个分类进行智能总结
             if (useLLM) {
@@ -208,7 +224,13 @@ class MemorySummarizer {
                     let finalCategoryCount = 0
                     let categorySummarized = false
                     for (const bucket of scopeBuckets.values()) {
-                        if (bucket.items.length > 5) {
+                        /*
+                         * 原实现桶内 >5 才总结，且结果条数 >= 输入的 90% 就整体放弃，
+                         * 导致"总结整理"按钮大概率 no-op。改为：桶内 >2 且该分类
+                         * 累计 >=5 条件即总结；保底阈值由 90% 收紧为 100%（条数相同但
+                         * 内容去重合并时仍允许替换）。
+                         */
+                        if (bucket.items.length > 2 && categoryData.items.length >= 5) {
                             const scopeKey = bucket.groupId === null ? 'global' : `group:${bucket.groupId}`
                             if (!scopeClients.has(scopeKey)) {
                                 scopeClients.set(
@@ -239,6 +261,9 @@ class MemorySummarizer {
             const finalMemories = await memoryService.getMemoriesByUser(userId, { groupId, limit: 1000 })
             result.finalCount = finalMemories.length
             result.afterCount = result.finalCount
+            if (cleanupResult) {
+                result.cleanedCount = cleanupResult.removedCount || 0
+            }
 
             logger.info(
                 `[MemorySummarizer] 用户 ${userId} 记忆总结完成: ${result.originalCount} -> ${result.finalCount}`
@@ -280,16 +305,20 @@ class MemorySummarizer {
                 return memories
             }
 
-            // 解析总结结果
-            const summarizedContents = parseMemorySummaryResponse(response)
-
-            if (summarizedContents.length === 0) {
+            const parsed = parseMemorySummaryResponse(response)
+            if (parsed.length === 0) {
                 return memories
             }
 
-            // 如果总结结果和原来差不多，保留原来的
-            if (summarizedContents.length >= memories.length * 0.9) {
-                return memories
+            const summarizedContents = parsed.filter(
+                (line, index) => parsed.findIndex(other => other === line) === index
+            )
+
+            // 保底保护：只有"逐条完全相同"才视为无变化，原样保留；
+            // 原实现 90% 阈值把轻度合并也整体放弃，导致整理按钮大概率 no-op
+            if (summarizedContents.length === memories.length) {
+                const identical = memories.every((m, index) => m.content === summarizedContents[index])
+                if (identical) return memories
             }
 
             const oldIds = memories.map(m => m.id)

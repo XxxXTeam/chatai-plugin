@@ -23,9 +23,7 @@ try {
  */
 class RenderService {
     constructor() {
-        this.exitHookRegistered = false
         this.defaultTheme = 'light'
-        this.templateDir = path.join(__dirname, '../../resources/templates')
         this.useCanvas = !!canvasModule
         this.fontLoaded = false
 

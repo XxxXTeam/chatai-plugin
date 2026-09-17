@@ -317,27 +317,26 @@ export class Chat extends plugin {
         // 群聊
         const groupCfg = cfg.group || {}
         if (!groupCfg.enabled) return { triggered: false }
+        const botId = e.self_id || e.bot?.uin || e.bot?.self_id || globalThis.Bot?.uin
+        const botIdText = botId === undefined || botId === null ? '' : String(botId)
+        const botIdHit = seg => {
+            if (!seg || seg.type !== 'at') return false
+            if (seg.data?.all === true || seg.data?.all === 'all') return true
+            return [seg.qq, seg.data?.qq, seg.data?.user_id, seg.user_id].some(
+                value => value !== undefined && value !== null && String(value) === botIdText
+            )
+        }
+        const isAtBot = Boolean(e.atBot || e.atme || (botIdText && e.message?.some?.(botIdHit)))
 
-        // @触发（兼容不设置 e.atBot 的适配器：额外检查消息中的 at 段）
-        const botId = e.self_id || e.bot?.uin || globalThis.Bot?.uin
-        const isAtBot =
-            e.atBot ||
-            (botId &&
-                e.message?.some?.(
-                    seg =>
-                        (seg.type === 'at' && String(seg.qq) === String(botId)) ||
-                        (seg.type === 'at' && String(seg.data?.qq) === String(botId))
-                ))
         if (groupCfg.at && isAtBot) {
             const isReplyToBot = isReplyToBotMessage(e)
             const cleanedMsg = this.cleanAtBot(rawMsg)
+            const finalMsg = cleanedMsg.trim() ? cleanedMsg : rawMsg
+            if (!finalMsg.trim()) return { triggered: false }
 
-            if (!cleanedMsg.trim()) return { triggered: false }
-
-            if (isReplyToBot && groupCfg.replyBot) {
-                return { triggered: true, msg: cleanedMsg }
-            } else if (!isReplyToBot) {
-                return { triggered: true, msg: cleanedMsg }
+            const replyBotEnabled = groupCfg.replyBot !== false
+            if ((isReplyToBot && replyBotEnabled) || !isReplyToBot) {
+                return { triggered: true, msg: finalMsg }
             }
         }
 
@@ -492,17 +491,18 @@ export class Chat extends plugin {
     cleanAtBot(text) {
         if (!text) return ''
         const e = this.e
-        const botId = e.self_id || e.bot?.uin || globalThis.Bot?.uin
+        const botId = e.self_id || e.bot?.uin || e.bot?.self_id || globalThis.Bot?.uin
         if (!botId) return text
 
         let result = text
+        const botIdText = String(botId)
 
         // 1. 清理CQ码格式: [CQ:at,qq=botId] 或 [CQ:at,qq=botId,text=xxx]
-        result = result.replace(new RegExp(`\\[CQ:at,qq=${botId}[^\\]]*\\]`, 'gi'), '')
+        result = result.replace(new RegExp(`\\[CQ:at,qq=${botIdText}[^\\]]*\\]`, 'gi'), '')
 
         // 2. 清理纯文本@botId格式（注意保留后续内容）
         // 使用前瞻确保不会误删其他@：只删除@botId后面跟着空白或结尾的情况
-        result = result.replace(new RegExp(`@${botId}(?=\\s|$|@)`, 'g'), '')
+        result = result.replace(new RegExp(`@${botIdText}(?=\\s|$|@)`, 'g'), '')
 
         // 3. 清理@机器人昵称（如果有）
         const botNickname = e.bot?.nickname
@@ -511,7 +511,10 @@ export class Chat extends plugin {
             result = result.replace(new RegExp(`@${escapedNickname}(?=\\s|$|@)`, 'gi'), '')
         }
 
-        // 4. 清理多余空格，保留单个空格分隔
+        // 4. 清理 Discord 风格 <@!botId>（QQBot 部分事件会带此格式）
+        result = result.replace(new RegExp(`<@!?${botIdText}>`, 'g'), '')
+
+        // 5. 清理多余空格，保留单个空格分隔
         result = result.replace(/\s+/g, ' ').trim()
 
         return result
@@ -1029,7 +1032,8 @@ export class Chat extends plugin {
         }
 
         push('📡 渠道信息', di.channel)
-        if (di.channel?.channelId) push('🔀 渠道切换链', di.switchChain)
+        // ChatService 写入的渠道字段是 id 而不是 channelId，原判定恒为假导致切换链永不输出
+        if (di.channel?.id) push('🔀 渠道切换链', di.switchChain)
         if (di.channel) push('🔁 重试统计', di.retryStats)
         if (di.channel)
             push('🎯 实际模型/渠道', {
@@ -1041,7 +1045,8 @@ export class Chat extends plugin {
         push('🎯 Scope信息', di.scope)
         push('🧠 记忆信息', di.memory)
         push('📚 知识库信息', di.knowledge)
-        if (di.request)
+        // di.request 恒被初始化为 {}，只在模型/消息数有效时才输出
+        if (di.request?.model || di.request?.messagesCount)
             debugLogs.push({
                 title: '📤 请求信息',
                 content: truncate({ model: di.request?.model, messagesCount: di.request?.messagesCount })
@@ -1049,11 +1054,16 @@ export class Chat extends plugin {
         push('🛠️ 可用工具', di.availableTools)
         push('🔧 工具调用', di.toolCalls)
         push('📥 响应信息', di.response)
-        if (di.timing) debugLogs.push({ title: '⏱️ 耗时', content: `${di.timing.duration}ms` })
+        // timing.duration 在 ChatService 正常路径恒缺失，用缺省文案代替 undefinedms
+        if (di.timing?.duration !== undefined) {
+            debugLogs.push({ title: '⏱️ 耗时', content: `${di.timing.duration}ms` })
+        } else if (di.timing) {
+            debugLogs.push({ title: '⏱️ 耗时', content: '未统计（响应阶段未写入 duration）' })
+        }
 
         if (debugLogs.length > 0) {
             try {
-                const { StandardMessage } = await import('../src/core/platform/index.js')
+                const { StandardMessage, StandardBotApi } = await import('../src/core/platform/index.js')
                 const selfId = this.e.self_id || this.e.user_id || this.e.bot?.uin || 10000
 
                 // 内层：每个 debug 分组作为一个子合并转发节点；
@@ -1085,7 +1095,14 @@ export class Chat extends plugin {
                     }
                 })
 
-                await platformSendForwardMsg(this.e, '🔍 Debug调试信息', outerNodes)
+                // 组装好的完整节点数组必须直通 sendForward，不能再经过
+                // platformAdapter.sendForwardMsg 的二次包装（会把嵌套 node 段压成畸形 JSON）
+                const api = new StandardBotApi({ event: this.e, bot: this.e.bot || globalThis.Bot })
+                await api.sendForward({
+                    groupId: this.e.group_id,
+                    userId: this.e.group_id ? null : this.e.user_id,
+                    nodes: outerNodes
+                })
             } catch {}
         }
     }

@@ -297,14 +297,16 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                 : ''
         }))
 
-        // 获取渠道列表（仅返回模型名称，包含群独立渠道的模型）
         const { channelManager } = await import('../llm/ChannelManager.js')
         await channelManager.init()
-        const channels = channelManager.getAll().map(c => ({
-            id: c.id,
-            name: c.name,
-            models: c.models || []
-        }))
+        const channels = channelManager
+            .getAll()
+            .filter(c => c.enabled !== false)
+            .map(c => ({
+                id: c.id,
+                name: c.name,
+                models: c.models || []
+            }))
 
         /* 将群独立渠道的模型合并到渠道列表，使前端模型下拉框能显示 */
         try {

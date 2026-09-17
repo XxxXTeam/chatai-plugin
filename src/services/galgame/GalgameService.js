@@ -1066,24 +1066,62 @@ class GalgameService {
             })
             requestSuccess = true
         } catch (err) {
-            gameLogger.error(`[${source}] LLM 调用失败: ${err.message}`)
-            // 记录失败统计
-            try {
-                await statsService.recordApiCall({
-                    channelId: client._channelInfo?.id || 'game',
-                    channelName: client._channelInfo?.name || '游戏模式',
-                    model: gameModel,
-                    duration: Date.now() - startTime,
-                    success: false,
-                    source: 'game',
-                    userId: userId || source
-                })
-            } catch {}
-            throw err
+            const hasInternalClient = typeof client?._channelInfo?.id === 'string'
+            if (hasInternalClient) {
+                try {
+                    const { callWithChannelDelegate } = await import('../llm/LlmDelegate.js')
+                    const lastUser = [...messages].reverse().find(m => m && m.role === 'user')
+                    const lastContent = Array.isArray(lastUser?.content)
+                        ? lastUser.content
+                        : [{ type: 'text', text: typeof lastUser?.content === 'string' ? lastUser.content : '' }]
+                    const systemMsg = messages.find(m => m && m.role === 'system')
+                    const systemOverride = typeof systemMsg?.content === 'string' ? systemMsg.content : undefined
+                    const delegated = await callWithChannelDelegate(
+                        { role: 'user', content: lastContent },
+                        {
+                            model: gameModel,
+                            maxToken: gameMaxTokens,
+                            temperature: gameResolvedTemperature,
+                            ...(systemOverride ? { systemOverride } : {}),
+                            ...(groupId ? { groupId } : {}),
+                            caller: `Galgame-${source}`
+                        }
+                    )
+                    response = delegated.response
+                    requestSuccess = true
+                    gameLogger.info(
+                        `[${source}] 直连失败已由委托重试成功 (渠道: ${delegated.channel?.name}, 尝试: ${delegated.tries})`
+                    )
+                } catch (delegateError) {
+                    gameLogger.error(`[${source}] LLM 调用失败: ${err.message}`)
+                }
+            } else {
+                gameLogger.error(`[${source}] LLM 调用失败: ${err.message}`)
+            }
+
+            if (!requestSuccess) {
+                // 记录失败统计
+                try {
+                    await statsService.recordApiCall({
+                        channelId: client._channelInfo?.id || 'game',
+                        channelName: client._channelInfo?.name || '游戏模式',
+                        model: gameModel,
+                        duration: Date.now() - startTime,
+                        success: false,
+                        source: 'game',
+                        userId: userId || source
+                    })
+                } catch {}
+                throw err
+            }
         }
 
-        // 提取文本响应
-        const contentArray = Array.isArray(response?.content) ? response.content : []
+        // 提取文本响应（sendMessageWithHistory 返回 content 数组，委托返回 contents 数组，两种形状兼容）
+        const contentArray = Array.isArray(response?.content)
+            ? response.content
+            : Array.isArray(response?.contents)
+              ? response.contents
+              : []
         const aiResponse =
             contentArray
                 ?.filter(c => c.type === 'text')

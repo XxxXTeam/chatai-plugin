@@ -167,16 +167,32 @@ router.post('/user/:userId', async (req, res) => {
     }
 })
 
-// POST /user/:userId/summarize - 触发用户记忆总结
+// POST /user/:userId/summarize - 触发用户记忆总结（含去重合并 + LLM 总结 + 低质量清理）
 router.post('/user/:userId/summarize', async (req, res) => {
     try {
         const { userId } = req.params
-        const { useLLM = true, groupId, model } = req.body || {}
+        const { useLLM = true, groupId, model, cleanup = true } = req.body || {}
 
         const result = await memorySummarizer.summarizeUserMemories(userId, {
             useLLM,
+            cleanup: cleanup !== false && cleanup !== 'false',
             ...(groupId !== undefined ? { groupId } : {}),
             ...(model ? { model } : {})
+        })
+        res.json(ChaiteResponse.ok(result))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /user/:userId/cleanup - 清理低质量记忆（低置信度/过期/过老/过短）
+router.post('/user/:userId/cleanup', async (req, res) => {
+    try {
+        const { userId } = req.params
+        const { groupId } = req.body || {}
+
+        const result = await memorySummarizer.cleanupMemories(userId, {
+            ...(groupId !== undefined ? { groupId } : {})
         })
         res.json(ChaiteResponse.ok(result))
     } catch (error) {
@@ -190,7 +206,9 @@ router.delete('/user/:userId', async (req, res) => {
         const { userId } = req.params
         const { hard = false } = req.query
 
-        const count = await memoryService.clearUserMemories(userId, hard === 'true')
+        // 查询参数恒为字符串，any 宽松化判断（与前端 ?hard=true 一致），避免原 === 'true' 恒 false
+        const hardDelete = hard === true || hard === 'true' || hard === '1'
+        const count = await memoryService.clearUserMemories(userId, hardDelete)
         const { databaseService } = await import('../storage/DatabaseService.js')
         databaseService.deleteKV(`personal-tags:${userId}`)
         res.json(
@@ -282,7 +300,8 @@ router.put('/:id', validateMemoryIdParam, async (req, res) => {
 router.delete('/:id', validateMemoryIdParam, async (req, res) => {
     try {
         const { hard = false } = req.query
-        await memoryService.deleteMemory(parseInt(req.params.id), hard === 'true')
+        const hardDelete = hard === true || hard === 'true' || hard === '1'
+        await memoryService.deleteMemory(parseInt(req.params.id), hardDelete)
         res.json(ChaiteResponse.ok({ success: true }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))

@@ -227,21 +227,23 @@ export async function callWithChannelDelegate(message, options = {}) {
             lastError = new Error(`渠道 ${pick.name} 客户端构造失败`)
             continue
         }
+        const modelMapping = channelManager.getActualModel(pick.id, model)
+        const actualModel = modelMapping?.actualModel || model
 
         try {
             const requestOptions = {
-                model,
+                model: actualModel,
                 ...(options.maxToken !== undefined ? { maxToken: options.maxToken } : {}),
                 ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
                 ...(options.systemOverride ? { systemOverride: options.systemOverride } : {}),
                 ...(options.disableHistorySave !== undefined ? { disableHistorySave: options.disableHistorySave } : {}),
                 stream: useStream
             }
-            logger.debug(`[LlmDelegate] ${caller} 调用: channel=${pick.name} model=${model} stream=${useStream}`)
+            logger.debug(`[LlmDelegate] ${caller} 调用: channel=${pick.name} model=${actualModel} stream=${useStream}`)
             const response = await client.sendMessage(message, requestOptions)
             return {
                 response,
-                model,
+                model: actualModel,
                 channel: pick,
                 stream: useStream,
                 tries: attempt + 1

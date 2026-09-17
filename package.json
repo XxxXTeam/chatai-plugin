@@ -36,7 +36,6 @@
         "https-proxy-agent": "^9.1.0",
         "ioredis": "^6.0.0",
         "jsonwebtoken": "^9.0.2",
-        "katex": "^0.18.7",
         "marked": "^18.0.1",
         "markmap-lib": "^0.18.12",
         "mathjax-full": "^3.2.2",
