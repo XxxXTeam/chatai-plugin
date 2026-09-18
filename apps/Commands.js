@@ -25,6 +25,38 @@ import { getRecentQQBotMessages } from '../src/services/storage/MessageCache.js'
 const debugSessions = new Map() // key: groupId或`private_${userId}`, value: boolean
 
 /**
+ * 结束对话前的记忆结算：从会话中读取 user/assistant 消息，达 3 条时
+ * 交给 memorySummarizer.onConversationEnd 提取（图谱 + 规则/LLM 记忆）。
+ * 会话为共享群时按 sender.user_id 只取当前用户可归属的轮次。
+ *
+ * @param {string} userId - 消息发送者标识
+ * @param {string|null} groupId - 群Id（私聊为 null）
+ * @param {string} conversationId - 会话Id（`group:<gid>` / `user:<uid>` 等）
+ * @returns {Promise<void>}
+ */
+async function settleConversationMemory(userId, groupId, conversationId) {
+    try {
+        const validMessages = databaseService
+            .getMessagesForUser(conversationId, userId, 1000)
+            .filter(m => m.role === 'user' || m.role === 'assistant')
+        const userMsgCount = validMessages.filter(m => m.role === 'user').length
+
+        if (validMessages.length < 3 || userMsgCount === 0) {
+            logger.debug(`[AI-Commands] 会话有效消息不足 3 条，跳过结束结算: ${conversationId}`)
+            return
+        }
+
+        const { memorySummarizer } = await import('../src/services/memory/MemorySummarizer.js')
+        await memorySummarizer.onConversationEnd(userId, validMessages, {
+            groupId: groupId ? String(groupId) : null,
+            summarize: true
+        })
+    } catch (error) {
+        logger.error('[AI-Commands] 结束对话前记忆结算失败（不影响清历史）:', error.message)
+    }
+}
+
+/**
  * 检查是否启用debug模式
  * @param {Object} e - 事件对象
  * @returns {boolean}
@@ -354,6 +386,10 @@ export class AICommands extends plugin {
             const messageCount = messages.length
             const userMsgCount = messages.filter(m => m.role === 'user').length
             const assistantMsgCount = messages.filter(m => m.role === 'assistant').length
+
+            // 结束对话先结算再清：清历史前把有效对话交给记忆提取（图谱 + 记忆），
+            // 结算失败不影响后续清历史（settleConversationMemory 内部已 try/catch）
+            await settleConversationMemory(userId, groupId, conversationId)
 
             // 执行清理
             await chatService.clearHistory(userId, groupId)

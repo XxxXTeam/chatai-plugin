@@ -8,8 +8,12 @@ import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
 import { isMaster } from '../src/utils/platformAdapter.js'
 import { chatService } from '../src/services/llm/ChatService.js'
+import { contextManager } from '../src/services/llm/ContextManager.js'
 import { renderService } from '../src/services/media/RenderService.js'
 import { segment } from '../src/utils/messageParser.js'
+import { chatLogger } from '../src/core/utils/logger.js'
+
+const logger = chatLogger
 
 export class AIManagement extends plugin {
     constructor() {
@@ -463,9 +467,31 @@ export class AIManagement extends plugin {
      */
     async endConversation() {
         try {
-            const userId = this.e.user_id?.toString()
-            const groupId = this.e.group_id || null
-            await chatService.clearHistory(userId, groupId)
+            // 先结算（>=3 条有效 user/assistant 消息时提取图谱与记忆），失败不影响清历史
+            databaseService.init()
+            try {
+                const userId = String(this.e.user_id ?? '')
+                const groupId = this.e.group_id || null
+                const conversationId = contextManager.getConversationId(userId, groupId)
+                const validMessages = databaseService
+                    .getMessagesForUser(conversationId, userId, 1000)
+                    .filter(msg => msg.role === 'user' || msg.role === 'assistant')
+
+                if (validMessages.length >= 3 && validMessages.some(msg => msg.role === 'user')) {
+                    const { memorySummarizer } = await import('../src/services/memory/MemorySummarizer.js')
+                    const settleResult = await memorySummarizer.onConversationEnd(userId, validMessages, {
+                        groupId: groupId ? String(groupId) : null,
+                        summarize: true
+                    })
+                    logger.debug(
+                        `[Management] 结束对话记忆结算: ${validMessages.length} 条有效消息, 提取=${settleResult.extractedCount}`
+                    )
+                }
+            } catch (settleErr) {
+                logger.warn('[Management] 结束对话记忆结算失败（不影响清历史）:', settleErr.message)
+            }
+
+            await chatService.clearHistory(this.e.user_id?.toString(), this.e.group_id || null)
             await this.reply('已结束当前对话，上下文已清除。', true)
         } catch (err) {
             await this.reply(`结束对话失败: ${err.message}`, true)

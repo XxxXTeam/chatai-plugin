@@ -1445,11 +1445,7 @@ export class AbstractClient {
                         `[Tool] 去重后工具调用数: ${modelResponse.toolCalls.length} -> ${deduplicatedToolCalls.length}`
                     )
                 }
-
-                // 追踪工具调用状态（仅记录，不阻断）
-                this.updateToolCallTracking(options, deduplicatedToolCalls)
-
-                // 直接使用去重后的工具调用列表，不过滤已执行过的调用
+                const loopSignal = this.updateToolCallTracking(options, deduplicatedToolCalls)
                 const filteredToolCalls = deduplicatedToolCalls
 
                 const intermediateTextContent = modelResponse.content?.filter(c => c.type === 'text') || []
@@ -1500,19 +1496,28 @@ export class AbstractClient {
                 // 检测模型类型，Gemini 模型更容易陷入循环
                 const modelStr = typeof options.model === 'string' ? options.model : ''
                 const isGeminiModel = modelStr.toLowerCase().includes('gemini')
-                // 提高多轮工具调用限制，允许更复杂的工具调用链
-                const maxBeforeDisable = isGeminiModel ? 6 : 10
 
-                // 硬上限：toolChoice:none 只是请求模型别再调工具，模型不服从时
-                // parseXmlToolCalls 仍会从纯文本里解析出工具调用，递归将永不终止。
-                // 这里强制结束递归，避免栈溢出与每层一次的计费调用。
+                // 轮次宽限：不再按"轮到就挂起"。maxBeforeDisable 仅作为"模型完全无视
+                // toolChoice:none 提示"的兜底轮次；真正的挂起信号只由重复循环驱动
+                // （loopSignal：本轮与上一轮的工具调用完全一致，或单工具调用的工具名重复）。
+                // 达到重复阈值后按剩余轮次软降级：先 toolChoice:none 请求模型用文本收尾，
+                // 不服从再由硬上限强制结束。
+                const repeatSuspendThreshold = 3
+                const maxBeforeDisableSoft = isGeminiModel ? 6 : 10
+                const repeatEnough =
+                    loopSignal &&
+                    (loopSignal.exactRepeated || loopSignal.simplifiedRepeated) &&
+                    (options._consecutiveIdenticalToolCallCount || 0) >= repeatSuspendThreshold
+
+                // 硬上限：只防御"重复循环到钞完"或"轮次远超软阈值仍不收尾"两种失控，
+                // 正常多轮推进（逐轮换工具）的轮数大幅放宽容忍
                 const maxTotalToolCalls =
                     this.toolCallLimitConfig?.maxTotalToolCalls || DEFAULT_TOOL_CALL_LIMIT.maxTotalToolCalls
-                const maxRounds = maxBeforeDisable * 2
+                const maxRoundsHard = 60
                 const totalToolCalls = options._totalToolCallCount || 0
-                if (totalToolCalls >= maxTotalToolCalls || options._toolCallCount >= maxRounds) {
+                if (totalToolCalls >= maxTotalToolCalls || options._toolCallCount >= maxRoundsHard) {
                     this.logger.warn(
-                        `[Tool] 达到工具调用硬上限（轮次 ${options._toolCallCount}/${maxRounds}，总调用 ${totalToolCalls}/${maxTotalToolCalls}），强制结束递归`
+                        `[Tool] 达到工具调用硬上限（轮次 ${options._toolCallCount}/${maxRoundsHard}，总调用 ${totalToolCalls}/${maxTotalToolCalls}），强制结束递归`
                     )
                     this.resetToolCallTracking(options)
 
@@ -1533,10 +1538,14 @@ export class AbstractClient {
                     }
                 }
 
-                // 连续调用超过阈值时禁用工具，防止无限循环
-                if (options._toolCallCount >= maxBeforeDisable) {
+                // 重复循环出现时禁用工具；正常推进保持工具可用，
+                // 让模型在多轮工具调用中继续工作（可输出中间句）
+                const overSoftLimit = options._toolCallCount >= maxBeforeDisableSoft
+                if (repeatEnough || overSoftLimit) {
                     options.toolChoice = { type: 'none' }
-                    this.logger.info(`[Tool] 工具调用轮次达到上限 ${maxBeforeDisable}，禁用工具以完成响应`)
+                    this.logger.info(
+                        `[Tool] ${repeatEnough ? `检测到重复循环（连续 ${options._consecutiveIdenticalToolCallCount} 次）` : '工具调用轮次达到软上限'}，请求模型以文本收尾`
+                    )
                 } else {
                     options.toolChoice = { type: 'auto' }
                 }
@@ -1874,23 +1883,36 @@ export class AbstractClient {
      * @returns {string|undefined} 如果超过限制返回原因
      */
     updateToolCallTracking(options, toolCalls) {
-        // 递增轮次计数
+        // 递增轮次计数与总调用计数
         options._consecutiveToolCallCount = (options._consecutiveToolCallCount || 0) + 1
         options._totalToolCallCount = (options._totalToolCallCount || 0) + toolCalls.length
 
-        const signature = this.buildToolCallSignature(toolCalls)
-
-        if (options._lastToolCallSignature === signature) {
+        // 完全一致签名：工具名+参数逐一相同
+        const exactSignature = this.buildToolCallSignature(toolCalls)
+        const exactRepeated = options._lastToolCallSignature === exactSignature
+        if (exactRepeated) {
             options._consecutiveIdenticalToolCallCount = (options._consecutiveIdenticalToolCallCount || 0) + 1
-            if (options._consecutiveIdenticalToolCallCount > 2) {
-                this.logger.warn(
-                    `[Tool] 连续相同调用 #${options._consecutiveIdenticalToolCallCount}: ${toolCalls[0]?.function?.name}`
-                )
-            }
         } else {
-            options._lastToolCallSignature = signature
+            options._lastToolCallSignature = exactSignature
             options._consecutiveIdenticalToolCallCount = 1
         }
+        let simplifiedRepeated = false
+        if (toolCalls.length === 1) {
+            const simplifiedSignature = this.buildSimplifiedSignature(toolCalls)
+            if (simplifiedSignature) {
+                simplifiedRepeated = options._lastSimplifiedSignature === simplifiedSignature
+                options._lastSimplifiedSignature = simplifiedSignature
+            }
+        } else {
+            options._lastSimplifiedSignature = undefined
+        }
+
+        if (exactRepeated && options._consecutiveIdenticalToolCallCount > 2) {
+            this.logger.warn(
+                `[Tool] 连续相同调用 #${options._consecutiveIdenticalToolCallCount}: ${toolCalls[0]?.function?.name || toolCalls[0]?.name}`
+            )
+        }
+        return { exactRepeated, simplifiedRepeated }
     }
 
     /**

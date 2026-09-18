@@ -95,9 +95,9 @@
 最底层，包含实际的工具逻辑：
 
 - **内置模块化工具** (`src/mcp/tools/`)
-  - 按功能分类（basic、user、group、message、media 等）
+  - 按功能分类（basic、user、group、message、media、memory、knowledgeGraph 等，共 25 个类别）
   - 每个类别是独立的 JS 模块
-  - 支持配置启用/禁用
+  - 支持配置启用/禁用；新增类别通过「自动启用新增分类」逻辑对既有配置默认启用
 
 - **自定义 JS 工具** (`data/tools/`)
   - 用户编写的工具脚本
@@ -524,6 +524,14 @@ McpManager.callTool()
 - 内置工具放在 `src/mcp/tools/` 按类别组织
 - 用户工具放在 `data/tools/` 使用热重载
 - 第三方服务使用 MCP 外部服务器接入
+
+### 2. 记忆、旁路调用与渲染（2026-09 变更）
+
+- **记忆总结结构化输出**：`MemorySummarizer` 的总结提示词为 `[分类] 内容` 结构化行（分类白名单 profile/preference/event/relation/topic/custom），解析端锚定分类行 + 自由文本推理词过滤，思考过程不再入库；`POST /api/memory/user/:userId/summarize` 的 `cleanup` 参数与 `/cleanup` 端点负责低质量清理
+- **工具调用 ID 归一化**：`src/core/adapters/tooling.js` 的 `normalizeAnyToolCallId` / `generateDeterministicToolCallId` 统一工具调用 ID 字符串化，避免 `function_response.name` 与 `tool_call_id` 的 400/500
+- **LlmDelegate 旁路委托**：记忆、知识图谱、总结等旁路 LLM 调用统一遵循渠道 streaming、错误上报、渠道切换与退避（`src/services/llm/LlmDelegate.js`）
+- **渲染 Canvas 化**：`RenderService` 已移除 Puppeteer/marked 链路，Markdown 渲染由 `src/services/media/canvasRenderer.js`（`@napi-rs/canvas` + `mathjax-full`）完成；`renderMarkdownToImage` 更名为 `renderMarkdownToCanvas`
+- **知识图谱**：`knowledgeGraph` 类别 12 个 kg_* 工具 + `KnowledgeGraphService`（kg_entities / kg_relationships 表），scopeId 经 `preserveTargetId` 按平台归一
 
 ### 2. 性能优化
 

@@ -17,6 +17,8 @@ import { formatUserMemoryBlock } from '../memory/MemoryService.js'
 const TIME_MAP_MAX_SIZE = 5000
 /** 时间戳 Map 的条目最大存活时长(ms) */
 const TIME_MAP_MAX_AGE = 7 * 24 * 60 * 60 * 1000
+/** 轮询游标在 kv_store 中的键前缀，进程重启后据此恢复上次处理时间 */
+const POLL_KV_PREFIX = 'memory:poll:last:'
 
 /**
  * 构建群聊记忆提取提示词。
@@ -97,6 +99,29 @@ export class MemoryManager {
         this.pollInterval = null
         this.lastPollTime = new Map() // userId -> timestamp
         this.lastSummarizeTime = new Map() // groupId/userId -> timestamp 记录上次总结时间
+    }
+
+    /**
+     * 获取单目标的查询游标。
+     *
+     * 先取内存 Map 快路径，落在本轮进程内即改用内存值；重启后内存记录丢失，
+     * 再用 kv_store 持久化游标兜底。碰撞窗口方案（写入 `处理前时间点`）保证重启后
+     * 同一批对话会被重新处理一遍，且所有关于 minPollInterval 的最新信息仍由
+     * pollAndSummarize 限于 KV 值所在轮次之内。
+     *
+     * @param {string} pollKey - 目标标识（私聊为用户，群聊为 `group:<gid>:user:<uid>`）
+     * @returns {{memoryTs: number, kvTs: number, effectiveTs: number}} 游标三元组
+     */
+    _resolvePollCursor(pollKey) {
+        const memoryTs = this.lastPollTime.get(pollKey) || 0
+        let kvTs = 0
+        try {
+            const raw = databaseService.getKV(`${POLL_KV_PREFIX}${pollKey}`)
+            if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) kvTs = raw
+        } catch (err) {
+            logger.debug('[MemoryManager] 读取轮询 KV 游标失败，回退内存值:', err.message)
+        }
+        return { memoryTs, kvTs, effectiveTs: Math.max(memoryTs, kvTs) }
     }
 
     /**
@@ -608,8 +633,8 @@ export class MemoryManager {
                     if (processedUsers.has(target.pollKey)) continue
                     processedUsers.add(target.pollKey)
 
-                    // 检查用户上次处理时间（确保不会过于频繁）
-                    const lastPoll = this.lastPollTime.get(target.pollKey) || 0
+                    // 合并内存（快路径）与 kv_store（跨进程重启）游标，见 _resolvePollCursor
+                    const { effectiveTs: lastPoll } = this._resolvePollCursor(target.pollKey)
                     if (now - lastPoll < minPollInterval) continue
 
                     // 检查对话是否有新消息（距离上次轮询后是否有新对话）
@@ -620,6 +645,11 @@ export class MemoryManager {
                     await this.analyzeUserConversations(target.userId, target.options)
                     this.lastPollTime.set(target.pollKey, now)
                     this._capTimeMap(this.lastPollTime)
+                    try {
+                        databaseService.setKV(`${POLL_KV_PREFIX}${target.pollKey}`, now)
+                    } catch (err) {
+                        logger.debug('[MemoryManager] 写入轮询 KV 游标失败:', err.message)
+                    }
 
                     // 避免一次处理太多用户
                     if (processedUsers.size >= 100) break
@@ -737,7 +767,7 @@ ${dialogText}
 2. 每条必须是用户明确说过的具体事实，不超过50字
 3. 全部用中文书写
 
-【输出格式】
+【输出格式（必须严格遵守）】
 每行一条记忆，最多10条。
 每行只写记忆本身，行首不要加“-”“•”或“1.”之类的符号和编号。
 不要输出小标题、分隔线、步骤说明或任何形式的思考过程。
@@ -765,6 +795,24 @@ ${dialogText}
             )
 
             const responseText = result.contents?.[0]?.text?.trim() || ''
+
+            // 覆写旧 memories 表前，不是纯文本就原样解析；语言字数不够则按现状读取
+            const memoryLines = responseText
+                .split(/\r?\n/)
+                .map(line =>
+                    String(line || '')
+                        .trim()
+                        .replace(/^[-*•+]+\s*/, '')
+                        .replace(/^\d+[.)、]\s*/, '')
+                )
+                .filter(
+                    line =>
+                        line &&
+                        line !== '无' &&
+                        !/^(?:注意|所以|因此|我们|需要|应该|可以|首先|其次|最后|综上|接下来|说明|备注|输出|整理|合并)/.test(
+                            line
+                        )
+                )
             // 记录统计
             try {
                 const recordSuccess = !!responseText && responseText !== '无'
@@ -791,7 +839,9 @@ ${dialogText}
             }
 
             // 解析新记忆列表
-            const newMemories = this._parseMemoryResponse(responseText)
+            const newMemories = this._parseMemoryResponse(
+                memoryLines.length > 0 ? memoryLines.join('\n') : responseText
+            )
 
             if (newMemories.length === 0) {
                 return { success: false, error: '总结结果没有可保存的记忆条目', reason: 'invalid_summary' }
@@ -828,7 +878,8 @@ ${dialogText}
             /^(步骤|第[一二三四五]|\d+\.|\d+、)/,
             /^(以下是|根据|综合|结合)/,
             /^[-=]{3,}/, // 分隔线
-            /^[【\[].+[】\]]:?$/ // 纯标题行
+            /^[【\[].+[】\]]:?$/, // 纯标题行
+            /^(?:注意|所以|因此|我们|需要|应该|可以|首先|其次|最后|综上|接下来|说明|备注|输出|整理|合并)/ // 思考/元叙述引导语
         ]
 
         return responseText

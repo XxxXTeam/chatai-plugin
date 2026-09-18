@@ -43,7 +43,10 @@ test('图谱刷新链路对 count 失败采用非阻断降级并保留旧列表'
 test('记忆页顶部图谱统计复用同一响应解包规则', () => {
     const pageSource = fs.readFileSync(path.join(root, 'frontend/app/(dashboard)/memory/page.tsx'), 'utf8')
     assert.match(pageSource, /import \{ normalizeGraphStats \} from '@\/components\/graph\/graphUtils'/)
-    assert.match(pageSource, /setGraphStats\(normalizeGraphStats\(response\)\)/)
+    // set-state-in-effect 重构后响应先归一化到 nextStats 缓冲，再于 finally 落 state；
+    // 断言锁定的是"复用同一解包规则"，而非具体调用形态
+    assert.match(pageSource, /nextStats = normalizeGraphStats\(response\)/)
+    assert.match(pageSource, /setGraphStats\(nextStats\)/)
     assert.doesNotMatch(pageSource, /const data = response\?\.data[\s\S]*setGraphStats\(\{/)
 })
 

@@ -651,7 +651,7 @@ export default {
 
 ## 内置工具列表
 
-当前内置工具由 `src/mcp/tools/index.js` 中的 22 个类别模块动态加载。下面列出常用工具；完整列表以源码和 Web 管理面板的工具列表为准。
+当前内置工具由 `src/mcp/tools/index.js` 中的 25 个类别模块动态加载。下面列出常用工具；完整列表以源码和 Web 管理面板的工具列表为准。
 
 ### 基础工具 (basic)
 | 工具名 | 说明 |
@@ -754,6 +754,28 @@ export default {
 | `imageGen` | `generate_image`, `generate_video`, `list_image_presets`, `use_image_preset` |
 | `qzone` | `publish_qzone_mood`, `get_qzone_feeds`, `like_qzone_post`, `set_self_longnick`, `group_poke` |
 | `shell` | `execute_command`, `get_system_info`, `get_process_info`, `read_env` |
+| `skills` | `list_skills`, `load_skill`, `get_skill_info` |
+
+### 知识图谱 (knowledgeGraph)
+
+`src/mcp/tools/knowledgeGraph.js` 共 12 个工具，统一读写 `kg_entities` / `kg_relationships` 表。
+
+| 工具名 | 说明 | 关键参数 |
+|--------|------|----------|
+| `kg_get_knowledge` | 获取当前用户/群的知识图谱上下文 | `user_id`・`group_id`（默认当前会话）、`max_entities`（默认 15）、`include_relations`（默认 true） |
+| `kg_list_entities` | 列出指定作用域的实体 | `scope_id`、`type`（person/thing/place/concept/event）、`limit`（默认 20，最大 100） |
+| `kg_search_entities` | 按名称模糊搜索实体 | `query`（必填）、`type`、`limit`（默认 10） |
+| `kg_save_entity` | 保存实体（同作用域同名自动合并） | `name`・`type`（必填）、`scope_id`、`properties` |
+| `kg_update_entity` | 更新实体属性或类型 | `entity_id`（必填）、`name`、`type`、`properties` |
+| `kg_delete_entity` | 删除实体（保留历史可回滚） | `entity_id`（必填） |
+| `kg_entity_history` | 获取实体历史版本 | `entity_id`（必填）、`limit`（默认 10，最大 100） |
+| `kg_entity_relations` | 获取与实体直接关联的实体 | `entity_id`（必填） |
+| `kg_save_relation` | 保存实体间关系 | `from_entity`・`to_entity`・`relation_type`（必填）、`scope_id`、`properties` |
+| `kg_delete_relation` | 删除关系（保留历史可回滚） | `relationship_id`（必填） |
+| `kg_query_subgraph` | 以实体为中心探索子图 | `entity_id`（必填）、`depth`（默认 1，最大 3） |
+| `kg_stats` | 作用域统计（实体数/关系数/类型分布） | `scope_id`（默认当前会话作用域，`null` 查全局合计） |
+
+`scope_id` 未显式传入时按事件上下文推导：群+用户 → `group:<gid>:user:<uid>`；仅群 → `group:<gid>`；仅用户 → `user:<uid>`；无事件 → `global`。类别通过「自动启用新增分类」逻辑对既有配置默认启用；模型侧由 `KNOWLEDGE_GRAPH_TOOL_GUIDE` 引导主动调用保存记忆。
 
 ---
 

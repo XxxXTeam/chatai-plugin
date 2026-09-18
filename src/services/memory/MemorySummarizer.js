@@ -6,7 +6,7 @@ import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
 import { memoryService } from './MemoryService.js'
 import { callMemoryLLM, formatMemoryTime } from './llmHelper.js'
-import { MemoryCategory, MemorySource, getCategoryLabel } from './MemoryTypes.js'
+import { MemoryCategory, MemorySource, getCategoryLabel, isValidCategory } from './MemoryTypes.js'
 import { preserveTargetId } from '../../core/platform/StandardBotIdentity.js'
 
 const logger = chatLogger
@@ -14,32 +14,37 @@ const logger = chatLogger
 /**
  * 记忆总结 Prompt 模板。
  *
- * 输出被 summarizeCategory 逐行拆开直接落库，因此必须禁止序号与说明性文字，
- * 否则“1.”“整理后：”这类前缀会成为记忆内容的一部分。
+ * 输出被 summarizeCategory 逐行拆开直接落库，因此必须是结构化行（[分类] 内容），
+ * 并显式切断归纳、比较、解释等诱导思考链的措辞——思考过程一旦以文本形式流出
+ * 就会被解析端误收为记忆（2026-09-17 线上事故）。
  * @constant {string}
  */
-const SUMMARY_PROMPT = `你是一个记忆总结助手，负责合并和整理同一分类下的用户记忆。
+const SUMMARY_PROMPT = `你是记忆整理器。你的唯一任务是输出整理后的记忆行，不要解释、不要推理，不要说"注意""所以""可以"之类的话。
 
-【任务】把下面这组记忆整理成更短、更准确的一组，去掉重复、冗余和已被推翻的内容。
+【任务】把下面同一分类的用户记忆合并精简：同一件事的多条合并为一条；互相矛盾时保留更新的一条；删除空泛无信息量的条目。
 
 【分类】{categoryLabel}
 
 【现有记忆】
-下列记忆按更新时间从新到旧排列，编号越小表示记录得越新；编号只用于阅读，不要出现在输出里。
 {memories}
 
-【要求】
-1. 表达同一件事的多条记忆合并成一条，保留信息最完整、最具体的说法
-2. 两条互相矛盾且无法共存时，保留编号更小的那条（它记录得更新）
-3. 删除与该分类无关、或空泛到没有信息量的条目
-4. 每条记忆一行，一句话说清
-5. 整理后的条数应当明显少于输入条数；若确实无可合并，原样输出全部记忆
+【输出格式（必须严格遵守）】
+1. 每行一条记忆，行首必须以方括号标注分类，形如：[preference] 用户喜欢打游戏
+2. 方括号内的分类标识只能使用下列之一（写英文，不要翻译）：profile、preference、event、relation、topic、custom
+3. 除记忆行之外不输出任何内容：不要序号、标题、解释、分析过程、开场白或结尾语
+4. 合并后总行数必须少于现有记忆行数；确实无法合并时，把现有记忆逐条原样抄一遍（保持 [分类] 前缀）`
 
-【输出格式】
-每行一条整理后的记忆。
-不要加序号、符号前缀、小标题或任何解释文字。
+const MEMORY_CATEGORY_PREFIX_PATTERN = /^\[([a-z]+)(?::[a-zA-Z0-9_-]+)?\]\s*[:：]?\s*(.+)$/i
 
-整理结果：`
+/** 推理/元叙述行首词：自由文本回退模式下命中即视为思考过程丢弃 */
+const REASONING_LINE_START =
+    /^(?:我们|注意|因此|所以|首先|其次|然后|最后|综上|接下来|需要|应该|可以|要|请|不要|避免|确保|检查|输出|输入|整理|合并|保留|删除|编号|格式|要求|最终|以上|以下|可能|或者|这样|如果)/
+
+/** 推理连接词重复计数：短句中出现 2 个以上即判定为思考过程 */
+const REASONING_WORDS = /(?:需要|应该|可以|所以|因此|注意|输出|整理|合并|编号|格式|检查|确保)/g
+
+/** 结果标签前缀：自由文本行先剥掉这些前缀，露出未带结构化前缀的真实记忆内容 */
+const RESULT_LABEL_PREFIX = /^(?:整理结果|总结结果|最终结果|结果)[：:]\s*/i
 
 /**
  * 冲突解决 Prompt 模板。
@@ -66,7 +71,13 @@ const CONFLICT_PROMPT = `你是一个记忆管理助手，需要在两条冲突�
 
 /**
  * 将模型输出解析为可直接写入记忆库的纯文本条目。
- * 兼容逐行文本和字符串数组 JSON，并剔除代码围栏、标题、编号及说明性前缀。
+ *
+ * 双通道解析：
+ * 1. 结构化行 `[category] 内容`（或 `[category:sub] 内容`，分类经白名单校验）
+ *    直接采信——这是提示词要求的主通道；
+ * 2. 自由文本行仅作兼容回退，过「思考过程过滤器」才保留；
+ *    过滤锚点包括：推理词集中的行、短句内推理词密度过高、明显元叙述句式。
+ * 模型把思考过程整段输出的坏 case（2026-09-17）会被两种通道共同拦截。
  *
  * @param {unknown} response - 模型原始输出
  * @returns {string[]} 去重后的记忆内容
@@ -85,24 +96,58 @@ export function parseMemorySummaryResponse(response) {
         } catch {}
     }
 
-    const normalized = lines
-        .map(line =>
-            String(line || '')
-                .trim()
-                .replace(/^```(?:json|markdown|text)?\s*$/i, '')
-                .replace(/^#{1,6}\s*/, '')
-                .replace(/^[-*•]+\s*/, '')
-                .replace(/^\d+[.)、]\s*/, '')
-                .replace(/^(?:整理结果|总结结果|结果)[：:]\s*/i, '')
-                .trim()
-        )
-        .filter(line => {
-            if (!line || line === '```' || line === '无') return false
-            if (/^(?:以下是|根据|我将|说明|备注)[：:]?$/i.test(line)) return false
-            return line.length <= 500
-        })
+    /** 结构化行：命中的行直接入库，不做其他过滤 */
+    const structured = []
+    /** 自由文本回退通道收集的行 */
+    const rest = []
 
-    return [...new Set(normalized)]
+    for (const raw of lines) {
+        const line = String(raw ?? '')
+            .trim()
+            .replace(/^```(?:json|markdown|text)?\s*$/i, '')
+            .trim()
+        if (!line || line === '```' || line === '无') continue
+
+        const structMatch = line.match(MEMORY_CATEGORY_PREFIX_PATTERN)
+        if (structMatch) {
+            const category = structMatch[1].toLowerCase()
+            const content = structMatch[2].trim()
+            if (!isValidCategory(category) || !content) continue
+            structured.push(content)
+            continue
+        }
+
+        // 自由文本回退通道（详见函数注释）
+        rest.push(line)
+    }
+
+    for (const line of rest) {
+        // 整行围栏、标题
+        if (/^#{1,6}\s*/.test(line)) continue
+
+        // 先剥旧格式列表/序号前缀与结果标签，露出内容本体再判断
+        const cleaned = line
+            .replace(/^[-*•+]+\s*/, '')
+            .replace(/^\d+[.)、]\s*/, '')
+            .replace(RESULT_LABEL_PREFIX, '')
+            .trim()
+        if (!cleaned || cleaned === '无' || cleaned.length > 500) continue
+
+        // 说明性前缀行
+        if (/^(?:以下是|以下|根据|我将|说明|备注|注意|总结|整理后|输出|输入)[：:，,]/.test(cleaned)) continue
+        if (/^(?:整理结果|总结结果|最终结果|接下来|所以|因此|综上|首先|其次|最后)[：:]?/.test(cleaned)) continue
+        // 行首推理元叙述（"注意""所以""我们只需要"等引导语）
+        if (REASONING_LINE_START.test(cleaned)) continue
+        // 推理连接词密度：短句中出现 2 个以上即判为思考过程
+        const reasoningMatch = cleaned.match(REASONING_WORDS)
+        if (reasoningMatch && reasoningMatch.length >= 2) continue
+        // 元叙述/自我问答句式
+        if (/为什么要|怎么(?:办|做|处理)|这样(?:做|行|可以|的话)/.test(cleaned)) continue
+
+        structured.push(cleaned)
+    }
+
+    return [...new Set(structured)]
 }
 
 class MemorySummarizer {
@@ -527,6 +572,27 @@ class MemorySummarizer {
                     logger.debug('[MemorySummarizer] 动态解析 LLM 客户端失败，回退为无 LLM 模式:', clientErr.message)
                 }
             }
+
+            // 图谱提取需要 3 条以上消息，对话才刚起步时跳过，避免每轮空跑
+            const graphReady = Array.isArray(messages) && messages.length >= 3
+            if (graphReady) {
+                try {
+                    const { knowledgeGraphExtractor } = await import('../storage/KnowledgeGraphExtractor.js')
+                    const graphUserId = String(preserveTargetId(globalThis.Bot, userId) ?? userId)
+                    const graphGroupId =
+                        groupId === null || groupId === undefined || groupId === ''
+                            ? null
+                            : String(preserveTargetId(globalThis.Bot, groupId) ?? groupId)
+                    const scopeId = graphGroupId ? `group:${graphGroupId}:user:${graphUserId}` : `user:${graphUserId}`
+                    await knowledgeGraphExtractor.extractFromConversation(messages, scopeId, {
+                        groupId: graphGroupId
+                    })
+                    result.graphExtracted = true
+                } catch (graphErr) {
+                    logger.debug('[MemorySummarizer] 知识图谱提取失败:', graphErr.message)
+                }
+            }
+
             const { memoryExtractor } = await import('./MemoryExtractor.js')
             if (llmClient && !memoryExtractor.llmClient) {
                 memoryExtractor.setLLMClient(llmClient)
@@ -537,21 +603,6 @@ class MemorySummarizer {
                 useLLM: !!llmClient
             })
             result.extractedCount = extracted.length
-            try {
-                const { knowledgeGraphExtractor } = await import('../storage/KnowledgeGraphExtractor.js')
-                const graphUserId = String(preserveTargetId(globalThis.Bot, userId) ?? userId)
-                const graphGroupId =
-                    groupId === null || groupId === undefined || groupId === ''
-                        ? null
-                        : String(preserveTargetId(globalThis.Bot, groupId) ?? groupId)
-                const scopeId = graphGroupId ? `group:${graphGroupId}:user:${graphUserId}` : `user:${graphUserId}`
-                await knowledgeGraphExtractor.extractFromConversation(messages, scopeId, {
-                    groupId: graphGroupId
-                })
-                result.graphExtracted = true
-            } catch (graphErr) {
-                logger.debug('[MemorySummarizer] 知识图谱提取失败:', graphErr.message)
-            }
             if (summarize && llmClient) {
                 const stats = await memoryService.getStats(userId)
                 if (stats.total > 20) {

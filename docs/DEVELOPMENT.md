@@ -277,6 +277,30 @@ const response = await chatService.chat({
 })
 ```
 
+### LlmDelegate（旁路调用委托）
+
+记忆、知识图谱、上下文总结等旁路 LLM 调用统一走 `src/services/llm/LlmDelegate.js`，与 ChatService 主路径同口径（流式遵循、错误上报、渠道切换与指数退避）：
+
+```javascript
+import { callWithChannelDelegate } from '../services/llm/LlmDelegate.js'
+
+// 旁路调用（自动选渠道，失败切渠道重试）
+const { response, model, channel, stream, tries } = await callWithChannelDelegate(
+    { role: 'user', content: '总结这段对话...' },
+    { model: 'gpt-4o-mini', caller: 'MemorySummarizer', maxToken: 400 }
+)
+```
+
+重试参数读 `llm.fallback`（`maxRetries` 默认 3、`retryDelay` 默认 500ms；`enableChannelSwitch !== false` 时允许切换渠道）。渠道由 `channelManager.getActualModel` 做模型映射，开关与主路径一致。
+
+### ErrorNotifier（错误通知）
+
+API 调用报错时按错误类型冷却去重后转发到 `errorNotify.targets` 配置的群聊/用户/主人（`src/services/ErrorNotifier.js`）；已成功通知或处于冷却时触发者侧静默。
+
+### RenderService / canvasRenderer（媒体渲染）
+
+Markdown 渲染已全面 Canvas 化（`@napi-rs/canvas` + `mathjax-full`），`RenderService.renderMarkdownToImage` 更名为 `renderMarkdownToCanvas`，原 Puppeteer/marked 链路已删除。
+
 ### ContextManager
 
 上下文管理，维护对话历史：
@@ -322,6 +346,8 @@ const results = await memoryManager.searchMemories(userId, '编程')
 // 删除记忆
 await memoryManager.deleteMemory(memoryId)
 ```
+
+轮询总结 `pollAndSummarize` 读取 `memory.minPollInterval`（默认 30 分钟）控制单目标两次总结的最小间隔；记忆总结结果采用 `[分类] 内容` 结构化行（分类白名单 profile/preference/event/relation/topic/custom），思考行由解析器过滤。
 
 ### DatabaseService
 
@@ -403,6 +429,13 @@ await mcpManager.connectServer({
 | `context.js` | context | 上下文管理 |
 | `bot.js` | bot | Bot信息 |
 | `voice.js` | voice | 语音功能 |
+| `extra.js` | extra | 扩展工具 |
+| `bltools.js` | bltools | 扩展工具集 |
+| `reminder.js` | reminder | 定时提醒 |
+| `imageGen.js` | imageGen | 绘图服务 |
+| `emoji.js` | emoji | 表情包管理 |
+| `skills.js` | skills | Skills 技能管理 |
+| `knowledgeGraph.js` | knowledgeGraph | 知识图谱 |
 
 ### 添加内置工具
 

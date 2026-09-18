@@ -1048,6 +1048,12 @@ export class ChatService {
             }
 
             if (event && event.reply) {
+                // 中间句回调：模型带工具调用的那一轮若同时输出文本（含纯文本思考/进度说明），
+                // 在执行工具前先行回给用户；只发工具不说话的轮次回一条轻量进度提示，
+                // 避免多轮工具调用期间用户长时间无反馈
+                const toolsSummary = client.tools?.length
+                    ? `（正在调用 ${client.tools.length} 个可用工具中的某一个…）`
+                    : ''
                 client.setOnMessageWithToolCall(async data => {
                     if (data?.intermediateText && data.isIntermediate) {
                         let text = data.intermediateText.trim()
@@ -1056,6 +1062,8 @@ export class ChatService {
                                 return
                             }
                             await event.reply(text, true)
+                        } else if (toolsSummary) {
+                            await event.reply(toolsSummary, true)
                         }
                     } else if (data?.type === 'text' && data.text) {
                         await event.reply(data.text, true)
@@ -1489,6 +1497,24 @@ export class ChatService {
                                 errorType = 'timeout'
                             } else if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('network')) {
                                 errorType = 'network'
+                            } else if (
+                                errorMsg.includes('500') ||
+                                errorMsg.includes('502') ||
+                                errorMsg.includes('503') ||
+                                errorMsg.includes('504') ||
+                                errorMsg.includes('Internal Server Error')
+                            ) {
+                                // 5xx/网关错误可重试：shouldTrySwitch 白名单含 'server'，
+                                // 但此前分类逻辑从不产出该类型，导致服务器错误退避/切换全部失效
+                                errorType = 'server'
+                            } else if (
+                                errorMsg.includes('400') ||
+                                errorMsg.includes('invalid_request') ||
+                                errorMsg.includes('invalid_parameter') ||
+                                errorMsg.includes('validation')
+                            ) {
+                                // 请求本身非法，切换渠道/重试无意义，标记为 client 避免无谓退避
+                                errorType = 'client'
                             }
 
                             logger.error(`[ChatService] 模型 ${currentModel} 请求失败 (${errorType}): ${errorMsg}`)

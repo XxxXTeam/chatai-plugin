@@ -47,8 +47,21 @@ const MEMORY_TOOL_GUIDE = `【记忆管理】
 - 回答涉及用户个人信息的问题前，先用 get_user_memories 或 search_user_memory 查询，不要凭空作答
 - 用户纠正此前说过的信息时，用 update_user_memory 更新对应记忆，而不是再存一条新的`
 
+/**
+ * 知识图谱工具使用说明。
+ * 仅在 kg_* 工具确实已加载时注入，避免提示模型调用当前不存在的工具。
+ * @constant {string}
+ */
+const KNOWLEDGE_GRAPH_TOOL_GUIDE = `【知识图谱维护】
+- 对话中确认了用户/群成员之间的事实（身份、关系、喜好、事件等）时，用 kg_save_entity / kg_save_relation 写入图谱
+- 回答涉及"你和谁是什么关系""之前说过什么"这类结构性问题前，先用 kg_search_entities 或 kg_get_knowledge 查询，不要凭空作答
+- 用户纠正或推翻之前的说法时，用 kg_update_entity 更新对应实体，不要新建重复节点`
+
 /** 记忆相关工具名，用于判断是否需要注入 MEMORY_TOOL_GUIDE */
 const MEMORY_TOOL_NAMES = ['save_user_memory', 'get_user_memories', 'search_user_memory', 'update_user_memory']
+
+/** 知识图谱相关工具名，用于判断是否需要注入 KNOWLEDGE_GRAPH_TOOL_GUIDE */
+const KNOWLEDGE_GRAPH_TOOL_NAMES = ['kg_get_knowledge', 'kg_save_entity', 'kg_search_entities', 'kg_save_relation']
 
 let _scopeManager = null
 async function ensureScopeManager() {
@@ -543,7 +556,24 @@ export class ChatAgent {
             ...(configuredToolChoice ? { toolChoice: configuredToolChoice } : {}),
             ...(options.tool_choice !== undefined ? { tool_choice: options.tool_choice } : {}),
             ...(options.responsesToolChoice !== undefined ? { responsesToolChoice: options.responsesToolChoice } : {}),
-            ...(options.responseToolChoice !== undefined ? { responseToolChoice: options.responseToolChoice } : {})
+            ...(options.responseToolChoice !== undefined ? { responseToolChoice: options.responseToolChoice } : {}),
+            // 中间句回传：模型带工具调用且同时输出文本时，先回给用户
+            // （与 ChatService 主路径同语义）；回调随 requestOptions 一起传播，
+            // 备选模型/换渠道重建的客户端无需重复接线
+            ...(event?.reply
+                ? {
+                      onMessageWithToolCall: async data => {
+                          if (!data?.isIntermediate) return
+                          const text = (data.intermediateText || '').trim()
+                          if (!text) return
+                          try {
+                              await event.reply(text, true)
+                          } catch (err) {
+                              logger.debug('[ChatAgent] 中间消息回复失败:', err.message)
+                          }
+                      }
+                  }
+                : {})
         }
 
         logger.info(`[ChatAgent] 模型: ${llmModel}, 工具: ${allTools.length}个`)
@@ -604,7 +634,7 @@ export class ChatAgent {
                     ...(topicText ? { recentTopics: [topicText] } : {})
                 })
             }
-            await this._triggerMemoryExtraction(cleanUserId, message, textContent, groupId)
+            await this._triggerMemoryExtraction(cleanUserId, message, textContent, groupId, validHistory)
         }
 
         // 收集调试信息
@@ -1097,6 +1127,11 @@ export class ChatAgent {
             sections.push(MEMORY_TOOL_GUIDE)
         }
 
+        /* 知识图谱工具同理：让模型在"发现新记忆"时主动维护图谱 */
+        if (KNOWLEDGE_GRAPH_TOOL_NAMES.some(name => availableNames.has(name))) {
+            sections.push(KNOWLEDGE_GRAPH_TOOL_GUIDE)
+        }
+
         systemPrompt += `\n\n${sections.join('\n\n')}`
 
         return systemPrompt
@@ -1396,21 +1431,66 @@ export class ChatAgent {
     }
 
     /**
-     * 异步触发结构化记忆提取和淡忘处理
+     * 异步触发结构化记忆提取和淡忘处理。
+     * summarize 不再禁用：对话进行中同样按需执行总结（summarizeUserMemories
+     * 自带 ">20 条才总结"的内部门槛，不会每轮都打 LLM）；写法上兜底 messages
+     * 为空，图谱提取需要 3 条以上消息，纯图片/空文本轮次会被提取链路自然忽略。
+     *
+     * 单轮只有 user/assistant 两条消息，达不到 KnowledgeGraphExtractor 的
+     * minMessages（3 条）与 MemoryExtractor 的 LLM 补提门槛（5 条）。因此从
+     * validHistory（已过滤空 assistant 的会话历史）取末尾最多 10 条
+     * user/assistant 文本消息拼接在本轮之前，让图谱/LLM 提取在多轮对话中真正生效；
+     * 历史缺失或不可用时退回仅本轮两条的现行为。
+     *
+     * @param {string} userId - 用户ID
+     * @param {string|object} message - 本轮用户消息
+     * @param {string} response - 本轮助手文本回复
+     * @param {string|number|null} [groupId] - 群ID
+     * @param {object[]} [history] - validHistory（`{role, content}` 数组）
+     * @returns {Promise<void>}
      */
-    async _triggerMemoryExtraction(userId, message, response, groupId) {
+    async _triggerMemoryExtraction(userId, message, response, groupId, history) {
         try {
             const { memorySummarizer } = await import('../memory/MemorySummarizer.js')
 
-            const messages = [
+            /* 仅取可提取文本的 user/assistant 历史；与 MemorySummarizer 的图文
+            格式无关，KnowledgeGraphExtractor 也按 role 消费。content 数为空文本
+            或纯图片（无 text 段）的直接过滤，参照 validHistory 的过滤标准。 */
+            const historyMessages = Array.isArray(history)
+                ? history
+                      .slice(-10)
+                      .filter(msg => msg && (msg.role === 'user' || msg.role === 'assistant'))
+                      .map(msg => ({
+                          role: msg.role,
+                          content:
+                              typeof msg.content === 'string'
+                                  ? msg.content
+                                  : Array.isArray(msg.content)
+                                    ? msg.content
+                                          .filter(c => c?.type === 'text')
+                                          .map(c => c.text)
+                                          .join('')
+                                    : ''
+                      }))
+                      .filter(msg => msg.content.trim().length > 0)
+                : []
+
+            /* 本轮两条沿用旧格式（字符串 content），与历史内容形状无关 */
+            const currentMessages = [
                 { role: 'user', content: message },
                 { role: 'assistant', content: response }
             ]
 
-            await memorySummarizer.onConversationEnd(userId, messages, {
-                groupId: groupId ? String(groupId) : null,
-                summarize: false
-            })
+            const messages = [...historyMessages, ...currentMessages]
+
+            await memorySummarizer.onConversationEnd(
+                userId,
+                messages.filter(m => m && typeof m.content === 'string' && m.content.trim()),
+                {
+                    groupId: groupId ? String(groupId) : null,
+                    summarize: true
+                }
+            )
         } catch (err) {
             logger.debug('[ChatAgent] 记忆提取失败:', err.message)
         }

@@ -122,7 +122,7 @@ class ErrorNotifier {
      * 发送错误通知到配置的目标
      * @param {Error|string} error - 错误对象
      * @param {object} context - 上下文 { e, userId, groupId, model }
-     * @returns {Promise<boolean>} 是否已发送通知（true = 已处理，调用方应静默）
+     * @returns {Promise<boolean>} 是否已处理（true = 调用方应静默）
      */
     async notify(error, context = {}) {
         if (!this.isEnabled()) return false
@@ -142,6 +142,10 @@ class ErrorNotifier {
         const api = new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot })
         const targets = cfg.targets || []
         let sent = false
+
+        if (targets.length === 0) {
+            logger.warn('[ErrorNotifier] 错误通知已启用但未配置任何目标（targets），错误详情将只记录在日志中')
+        }
 
         for (const target of targets) {
             try {
@@ -172,7 +176,10 @@ class ErrorNotifier {
             }
         }
 
-        return sent
+        if (!sent) {
+            logger.warn(`[ErrorNotifier] 错误类型 ${errorType} 的通知未送达任何目标（按配置静默，不回触发者）`)
+        }
+        return true
     }
 }
 
