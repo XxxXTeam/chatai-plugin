@@ -32,7 +32,6 @@
  * @property {string[]} [responseModalities]
  * @property {any[]} [safetySettings]
  * @property {ToolCallLimitConfig} [toolCallLimit]
- * @property {number} [_consecutiveToolCallCount]
  * @property {number} [_consecutiveIdenticalToolCallCount]
  * @property {string} [_lastToolCallSignature]
  * @property {(chunk: import('./models').ModelResponseChunk) => Promise<void>} [onChunk]
@@ -50,7 +49,8 @@
 /**
  * @typedef {Object} ToolCallLimitConfig
  * @property {number} [maxConsecutiveCalls]
- * @property {number} [maxConsecutiveIdenticalCalls]
+ * @property {number} [maxConsecutiveIdenticalCalls] - 连续完全一致（工具名+参数相同）调用达到该次数后判定重复循环并挂起工具
+ * @property {number} [maxTotalToolCalls] - 保留字段：目前不参与任何轮次/总次数上限判定（仅重复循环拦截生效）
  */
 
 /**

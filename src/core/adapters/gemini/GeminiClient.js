@@ -4,6 +4,7 @@ import { chatLogger } from '../../utils/logger.js'
 import {
     AbstractClient,
     preprocessImageUrls,
+    preprocessImageUrlsForClient,
     parseXmlToolCalls,
     extractText,
     resolveModelName
@@ -140,7 +141,8 @@ export class GeminiClient extends AbstractClient {
          */
         const imageConfig = this.options?.imageConfig || {}
         const transferMode = imageConfig.transferMode || 'auto'
-        const preprocessedHistories = transferMode !== 'url' ? await preprocessImageUrls(histories) : histories
+        const preprocessedHistories =
+            transferMode !== 'url' ? await preprocessImageUrlsForClient(histories, 'gemini') : histories
 
         // 从历史记录中分离系统提示词
         let systemInstruction = options.systemOverride || ''
@@ -306,7 +308,8 @@ export class GeminiClient extends AbstractClient {
          */
         const streamImageConfig = this.options?.imageConfig || {}
         const streamTransferMode = streamImageConfig.transferMode || 'auto'
-        const preprocessedHistories = streamTransferMode !== 'url' ? await preprocessImageUrls(histories) : histories
+        const preprocessedHistories =
+            streamTransferMode !== 'url' ? await preprocessImageUrlsForClient(histories, 'gemini') : histories
 
         let systemInstruction = options.systemOverride || ''
         const converter = getFromChaiteConverter('gemini')

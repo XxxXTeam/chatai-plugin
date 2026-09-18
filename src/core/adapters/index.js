@@ -3,6 +3,7 @@ export {
     parseXmlToolCalls,
     preprocessMediaToBase64,
     preprocessImageUrls,
+    preprocessImageUrlsForClient,
     needsBase64Preprocess,
     needsImageBase64Preprocess
 } from './AbstractClient.js'

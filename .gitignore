@@ -55,3 +55,4 @@ frontend/
 .serena/
 .playwright-mcp/
 pnpm-lock.yaml
+.eslintcache

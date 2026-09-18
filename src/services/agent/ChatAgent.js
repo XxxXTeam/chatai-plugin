@@ -1413,11 +1413,16 @@ export class ChatAgent {
                     retryCount++
                 } catch (error) {
                     lastError = error
-                    logger.error(`[ChatAgent] 模型 ${currentModel} 请求失败:`, error.message)
+                    const errorMsg = error?.message || ''
+                    logger.debug(
+                        `[ChatAgent] 模型 ${currentModel} 请求失败（第 ${retryCount + 1}/${maxRetries + 1} 次）:`,
+                        errorMsg
+                    )
                     retryCount++
 
                     if (retryCount <= maxRetries) {
-                        await new Promise(r => setTimeout(r, 500 * retryCount))
+                        const retryDelay = Number(fallbackConfig.retryDelay) || 500
+                        await new Promise(r => setTimeout(r, Math.min(retryDelay * Math.pow(2, retryCount - 1), 10000)))
                     }
                 }
             }

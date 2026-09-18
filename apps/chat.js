@@ -786,9 +786,7 @@ export class Chat extends plugin {
                 model: config.get('llm.defaultModel')
             })
             if (!notified) {
-                const userFriendlyError = this.formatErrorForUser(error)
-                const errorResult = await this.reply(userFriendlyError, true)
-                this.handleAutoRecall(errorResult, true)
+                logger.debug('[Chat] 请求失败且未启用错误通知，错误详情见上方日志:', error.message)
             }
         }
 

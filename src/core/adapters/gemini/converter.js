@@ -6,6 +6,44 @@ import {
 import { toGeminiTool, generateDeterministicToolCallId } from '../tooling.js'
 import { mcpContentBlockToText } from '../../utils/toolResult.js'
 
+const GEMINI_IMAGE_MIME_WHITELIST = new Set([
+    'image/jpeg',
+    'image/jpg',
+    'image/png',
+    'image/webp',
+    'image/heif',
+    'image/heic'
+])
+
+/**
+ * 解析 t.image 的 mime 与 base64 数据，并执行白名单判定。
+ * @param {Object} t - 图片内容块
+ * @returns {{ok: boolean, inlineData?: Object, fallback?: string}}
+ */
+function toGeminiImageInlineData(t) {
+    const raw = t.image || ''
+    if (raw.startsWith('data:')) {
+        const idx = raw.indexOf(';base64,')
+        if (idx === -1) return { ok: false, fallback: '[不支持的图片已跳过]' }
+        const mimeType = raw.slice(5, idx).toLowerCase()
+        if (GEMINI_IMAGE_MIME_WHITELIST.has(mimeType)) {
+            return {
+                ok: true,
+                inlineData: { mimeType, data: raw.slice(idx + ';base64,'.length) }
+            }
+        }
+        return { ok: false, fallback: '[不支持的图片已跳过]' }
+    }
+    if (raw) {
+        // 无 data 前缀的裸 base64：无法判定原始格式，按既有约定以 image/jpeg 发送
+        return {
+            ok: true,
+            inlineData: { mimeType: t.mimeType || 'image/jpeg', data: raw }
+        }
+    }
+    return { ok: false, fallback: '[图片]' }
+}
+
 /**
  * 从 tool 消息的外层字段推导工具名。
  * tcr.name 由 executeToolCalls 的 toolName 计算写入，正常流程必有值；
@@ -72,27 +110,11 @@ registerFromChaiteConverter('gemini', source => {
                     switch (t.type) {
                         case 'text':
                             return { text: t.text }
-                        case 'image':
-                            // Gemini expects inline data format
-                            // 注：URL图片已在GeminiClient中预处理为base64
-                            if (t.image?.startsWith('data:')) {
-                                const [mimeType, base64Data] = t.image.split(';base64,')
-                                return {
-                                    inlineData: {
-                                        mimeType: mimeType.replace('data:', ''),
-                                        data: base64Data
-                                    }
-                                }
-                            } else if (t.image) {
-                                // Base64 without data URL prefix
-                                return {
-                                    inlineData: {
-                                        mimeType: 'image/jpeg',
-                                        data: t.image
-                                    }
-                                }
-                            }
-                            return { text: '[图片]' }
+                        case 'image': {
+                            const resolved = toGeminiImageInlineData(t)
+                            if (resolved.ok) return { inlineData: resolved.inlineData }
+                            return { text: resolved.fallback }
+                        }
                         case 'video':
                             // Gemini 支持视频的 inlineData 格式
                             if (t.video?.startsWith('data:')) {

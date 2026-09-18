@@ -1046,17 +1046,111 @@ function getMimeType(ext) {
 }
 
 /**
+ * 根据客户端类型获取图片发送策略。
+ * @param {string} clientType - openai/gemini/claude 等
+ * @returns {{supported: string[], target: string, staticFallback: string}}
+ */
+function getImageSendPolicy(clientType = '') {
+    if (clientType === 'gemini') {
+        return {
+            supported: ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heif', 'image/heic'],
+            target: 'image/webp',
+            staticFallback: 'image/jpeg'
+        }
+    }
+    return {
+        supported: ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'],
+        target: 'image/png',
+        staticFallback: 'image/jpeg'
+    }
+}
+
+/**
+ * 判断 mime 是否为 Gemini 图片白名单外的图片类型。
+ */
+function isUnsupportedImageMime(mimeType, clientType) {
+    if (!mimeType || !mimeType.startsWith('image/')) return false
+    const { supported } = getImageSendPolicy(clientType)
+    const normalized = mimeType.toLowerCase()
+    if (supported.includes(normalized)) return false
+    // 图片类型但不在白名单内（gif/bmp/svg/ico/x-icon 等）
+    return true
+}
+
+/**
+ * 根据客户端类型转码图片。
+ * @param {Buffer} input - 原始图片二进制
+ * @param {string} mimeType - 原始 mime
+ * @param {string} clientType
+ * @returns {Promise<{mimeType: string, data: Buffer} | null>}
+ */
+async function transcodeImageForClient(input, mimeType, clientType, label = '') {
+    const { supported, target, staticFallback } = getImageSendPolicy(clientType)
+    const normalized = mimeType?.toLowerCase()
+    if (!normalized || !normalized.startsWith('image/') || supported.includes(normalized)) {
+        return { mimeType: normalized, data: input }
+    }
+
+    const sharp = (await import('sharp')).default
+    try {
+        const pipeline = sharp(input).rotate()
+        if (normalized === 'image/svg+xml') pipeline.density(300)
+        const output = await (target === 'image/webp' ? pipeline.webp() : pipeline.png()).toBuffer({
+            resolveWithObject: true
+        })
+        logger.debug(`[MediaTranscode] ${label || mimeType} -> ${output.info.format} via ${clientType}`)
+        return { mimeType: `image/${output.info.format}`, data: output.data }
+    } catch (targetErr) {
+        try {
+            const fallback = await sharp(input).rotate().jpeg().toBuffer({ resolveWithObject: true })
+            logger.debug(`[MediaTranscode] ${label || mimeType} 目标格式失败回退静态 JPEG: ${targetErr.message}`)
+            return { mimeType: 'image/jpeg', data: fallback.data }
+        } catch (fallbackErr) {
+            logger.debug(`[MediaTranscode] ${label || mimeType} 转码彻底失败，降级为文本: ${fallbackErr.message}`)
+            return null
+        }
+    }
+}
+
+/**
+ * 从 data URL 或裸 base64 中按需转码出目标白名单 mime。
+ * @param {string} imageValue - data:...;base64,... 或裸 base64
+ * @param {string} mimeType
+ * @param {string} clientType
+ * @param {string} [label]
+ * @returns {Promise<{mimeType: string, data: string} | null>}
+ */
+async function transcodeImageValueForClient(imageValue, mimeType, clientType, label = '') {
+    let raw = imageValue
+    if (raw.startsWith('data:')) {
+        const idx = raw.indexOf(';base64,')
+        if (idx === -1) return null
+        raw = raw.slice(idx + ';base64,'.length)
+    }
+    try {
+        const buffer = Buffer.from(raw, 'base64')
+        const result = await transcodeImageForClient(buffer, mimeType, clientType, label)
+        if (!result) return null
+        return { mimeType: result.mimeType, data: result.data.toString('base64') }
+    } catch (err) {
+        logger.debug(`[MediaTranscode] ${label || mimeType} 解码失败: ${err.message}`)
+        return null
+    }
+}
+
+/**
  * 预处理消息中的媒体URL，转换为base64
  * 支持：图片、视频、音频
  * @param {Array} histories - 消息历史
  * @param {Object} options - 选项
  * @param {boolean} [options.processVideo=true] - 是否处理视频
  * @param {boolean} [options.processAudio=true] - 是否处理音频
+ * @param {string} [options.clientType=''] - 客户端类型
  * @param {number} [options.maxVideoSize=20*1024*1024] - 最大视频大小(bytes)
  * @returns {Promise<Array>}
  */
 export async function preprocessMediaToBase64(histories, options = {}) {
-    const { processVideo = true, processAudio = true, maxVideoSize = 20 * 1024 * 1024 } = options
+    const { processVideo = true, processAudio = true, clientType = '', maxVideoSize = 20 * 1024 * 1024 } = options
     const processed = []
 
     for (const msg of histories) {
@@ -1064,8 +1158,35 @@ export async function preprocessMediaToBase64(histories, options = {}) {
             const newContent = []
             for (const item of msg.content) {
                 try {
-                    // 处理 image 类型
-                    if (item.type === 'image' && item.image && !item.image.startsWith('data:')) {
+                    if (item.type === 'image' && item.image) {
+                        if (item.image.startsWith('data:')) {
+                            const idx = item.image.indexOf(';base64,')
+                            if (idx !== -1) {
+                                const mimeType = (item.mimeType || item.image.slice(5, idx)).toLowerCase()
+                                if (clientType && isUnsupportedImageMime(mimeType, clientType)) {
+                                    const transcoded = await transcodeImageValueForClient(
+                                        item.image,
+                                        mimeType,
+                                        clientType,
+                                        mimeType
+                                    )
+                                    if (transcoded) {
+                                        newContent.push({
+                                            type: 'image',
+                                            image: `data:${transcoded.mimeType};base64,${transcoded.data}`,
+                                            mimeType: transcoded.mimeType
+                                        })
+                                        logger.debug('[MediaTranscode] dataURL图片转码:', mimeType)
+                                    } else {
+                                        newContent.push({ type: 'text', text: '[不支持的图片已跳过]' })
+                                        logger.debug('[MediaTranscode] dataURL图片转码失败降级文本:', mimeType)
+                                    }
+                                    continue
+                                }
+                            }
+                            newContent.push(item)
+                            continue
+                        }
                         // 判断是否为原始 base64 数据（非URL格式）
                         const isRawBase64 =
                             !item.image.startsWith('http://') &&
@@ -1075,6 +1196,26 @@ export async function preprocessMediaToBase64(histories, options = {}) {
                             !item.image.startsWith('/')
                         if (isRawBase64) {
                             const mimeType = item.mimeType || 'image/jpeg'
+                            if (clientType && isUnsupportedImageMime(mimeType, clientType)) {
+                                const transcoded = await transcodeImageValueForClient(
+                                    item.image,
+                                    mimeType,
+                                    clientType,
+                                    mimeType
+                                )
+                                if (transcoded) {
+                                    newContent.push({
+                                        type: 'image',
+                                        image: `data:${transcoded.mimeType};base64,${transcoded.data}`,
+                                        mimeType: transcoded.mimeType
+                                    })
+                                    logger.debug('[MediaTranscode] 原始base64图片转码:', mimeType)
+                                } else {
+                                    newContent.push({ type: 'text', text: '[不支持的图片已跳过]' })
+                                    logger.debug('[MediaTranscode] 图片转码失败降级文本:', mimeType)
+                                }
+                                continue
+                            }
                             newContent.push({
                                 type: 'image',
                                 image: `data:${mimeType};base64,${item.image}`
@@ -1102,6 +1243,29 @@ export async function preprocessMediaToBase64(histories, options = {}) {
                     ) {
                         const { mimeType, data, error } = await urlToBase64(item.image_url.url, 'image/jpeg')
                         if (data && !error) {
+                            if (clientType && isUnsupportedImageMime(mimeType, clientType)) {
+                                const transcoded = await transcodeImageValueForClient(
+                                    `data:${mimeType};base64,${data}`,
+                                    mimeType,
+                                    clientType,
+                                    item.image_url.url?.substring(0, 50)
+                                )
+                                if (transcoded) {
+                                    newContent.push({
+                                        type: 'image',
+                                        image: `data:${transcoded.mimeType};base64,${transcoded.data}`,
+                                        mimeType: transcoded.mimeType
+                                    })
+                                    logger.debug(
+                                        '[MediaTranscode] image_url转码:',
+                                        item.image_url.url?.substring(0, 50)
+                                    )
+                                } else {
+                                    newContent.push({ type: 'text', text: '[不支持的图片已跳过]' })
+                                    logger.debug('[MediaTranscode] image_url转码失败降级文本')
+                                }
+                                continue
+                            }
                             newContent.push({
                                 type: 'image',
                                 image: `data:${mimeType};base64,${data}`
@@ -1186,8 +1350,23 @@ export async function preprocessMediaToBase64(histories, options = {}) {
     }
     return processed
 }
+/**
+ * 预处理消息中的图片URL，转换为base64
+ * @param {Array} histories - 消息历史
+ * @returns {Promise<Array>}
+ */
 export async function preprocessImageUrls(histories) {
     return preprocessMediaToBase64(histories, { processVideo: true, processAudio: true })
+}
+
+/**
+ * 预处理消息中的图片URL，转换为base64，并根据客户端类型进行转码
+ * @param {Array} histories - 消息历史
+ * @param {string} clientType - openai/gemini/claude
+ * @returns {Promise<Array>}
+ */
+export async function preprocessImageUrlsForClient(histories, clientType = '') {
+    return preprocessMediaToBase64(histories, { processVideo: true, processAudio: true, clientType })
 }
 
 /**
@@ -1264,10 +1443,14 @@ export function resolveModelName(requestedModel, adapterFallback) {
 }
 
 /**
- * 工具调用限制配置
+ * 工具调用限制配置。
+ * 当前语义：仅当连续完全一致（工具名+参数都相同）的调用达到
+ * maxConsecutiveIdenticalCalls 时判定重复循环并挂起工具，其余轮次/总次数不设上限。
+ * maxConsecutiveCalls 与 maxTotalToolCalls 为保留字段，不参与判定。
  * @typedef {Object} ToolCallLimitConfig
- * @property {number} [maxConsecutiveCalls] - 最大连续调用次数
- * @property {number} [maxConsecutiveIdenticalCalls] - 最大连续相同调用次数
+ * @property {number} [maxConsecutiveCalls] - 保留字段：不参与当前判定
+ * @property {number} [maxConsecutiveIdenticalCalls] - 连续完全一致调用达到该次数后判定重复循环
+ * @property {number} [maxTotalToolCalls] - 保留字段：不参与当前判定
  */
 
 /**
@@ -1281,9 +1464,9 @@ export function resolveModelName(requestedModel, adapterFallback) {
 
 /** 默认工具调用限制 */
 const DEFAULT_TOOL_CALL_LIMIT = {
-    maxConsecutiveCalls: 10, // 最大连续调用次数（提高以支持复杂任务）
-    maxConsecutiveIdenticalCalls: 4, // 最大连续完全相同调用次数（工具名+参数都相同）
-    maxTotalToolCalls: 25 // 单次对话最大工具调用总数
+    maxConsecutiveCalls: 10, // 保留字段：当前不参与判定
+    maxConsecutiveIdenticalCalls: 4, // 连续完全一致调用（工具名+参数都相同）达到该次数后拦截
+    maxTotalToolCalls: 25 // 保留字段：当前不参与判定
 }
 
 /**
@@ -1488,63 +1671,17 @@ export class AbstractClient {
                 }
                 options.parentMessageId = tcMsgId
                 await this.historyManager.saveHistory(toolCallResultMessage, options.conversationId)
-
-                // 追踪工具调用轮次（总调用数已由 updateToolCallTracking 累加到 _totalToolCallCount）
-                if (!options._toolCallCount) options._toolCallCount = 0
-                options._toolCallCount++
-
-                // 检测模型类型，Gemini 模型更容易陷入循环
-                const modelStr = typeof options.model === 'string' ? options.model : ''
-                const isGeminiModel = modelStr.toLowerCase().includes('gemini')
-
-                // 轮次宽限：不再按"轮到就挂起"。maxBeforeDisable 仅作为"模型完全无视
-                // toolChoice:none 提示"的兜底轮次；真正的挂起信号只由重复循环驱动
-                // （loopSignal：本轮与上一轮的工具调用完全一致，或单工具调用的工具名重复）。
-                // 达到重复阈值后按剩余轮次软降级：先 toolChoice:none 请求模型用文本收尾，
-                // 不服从再由硬上限强制结束。
-                const repeatSuspendThreshold = 3
-                const maxBeforeDisableSoft = isGeminiModel ? 6 : 10
+                const identicalThreshold =
+                    this.toolCallLimitConfig?.maxConsecutiveIdenticalCalls ||
+                    DEFAULT_TOOL_CALL_LIMIT.maxConsecutiveIdenticalCalls
                 const repeatEnough =
-                    loopSignal &&
-                    (loopSignal.exactRepeated || loopSignal.simplifiedRepeated) &&
-                    (options._consecutiveIdenticalToolCallCount || 0) >= repeatSuspendThreshold
+                    loopSignal.exactRepeated === true &&
+                    (options._consecutiveIdenticalToolCallCount || 0) >= identicalThreshold
 
-                // 硬上限：只防御"重复循环到钞完"或"轮次远超软阈值仍不收尾"两种失控，
-                // 正常多轮推进（逐轮换工具）的轮数大幅放宽容忍
-                const maxTotalToolCalls =
-                    this.toolCallLimitConfig?.maxTotalToolCalls || DEFAULT_TOOL_CALL_LIMIT.maxTotalToolCalls
-                const maxRoundsHard = 60
-                const totalToolCalls = options._totalToolCallCount || 0
-                if (totalToolCalls >= maxTotalToolCalls || options._toolCallCount >= maxRoundsHard) {
-                    this.logger.warn(
-                        `[Tool] 达到工具调用硬上限（轮次 ${options._toolCallCount}/${maxRoundsHard}，总调用 ${totalToolCalls}/${maxTotalToolCalls}），强制结束递归`
-                    )
-                    this.resetToolCallTracking(options)
-
-                    if (options.disableHistorySave) {
-                        await this.historyManager.deleteConversation(options.conversationId)
-                    }
-
-                    const finalContents = modelResponse.content?.filter(c => c.type === 'text' && c.text?.trim()) || []
-                    return {
-                        id: modelResponse.id,
-                        model: modelResponse.model || options.model,
-                        contents:
-                            finalContents.length > 0
-                                ? finalContents
-                                : [{ type: 'text', text: '工具调用次数已达上限，已根据现有结果结束本轮处理。' }],
-                        usage: modelResponse.usage,
-                        toolCallLogs: options._toolCallLogs || []
-                    }
-                }
-
-                // 重复循环出现时禁用工具；正常推进保持工具可用，
-                // 让模型在多轮工具调用中继续工作（可输出中间句）
-                const overSoftLimit = options._toolCallCount >= maxBeforeDisableSoft
-                if (repeatEnough || overSoftLimit) {
+                if (repeatEnough) {
                     options.toolChoice = { type: 'none' }
                     this.logger.info(
-                        `[Tool] ${repeatEnough ? `检测到重复循环（连续 ${options._consecutiveIdenticalToolCallCount} 次）` : '工具调用轮次达到软上限'}，请求模型以文本收尾`
+                        `[Tool] 检测到重复循环（连续 ${options._consecutiveIdenticalToolCallCount} 次完全一致的调用），请求模型以文本收尾`
                     )
                 } else {
                     options.toolChoice = { type: 'auto' }
@@ -1865,28 +2002,20 @@ export class AbstractClient {
     initToolCallTracking(options) {
         if (options._toolCallInitialized) return
         options._toolCallInitialized = true
-        options._consecutiveToolCallCount = 0
         options._consecutiveIdenticalToolCallCount = 0
-        options._consecutiveSimilarToolCallCount = 0
-        options._totalToolCallCount = 0
         options._lastToolCallSignature = undefined
-        options._lastSimplifiedSignature = undefined
-        options._toolCallSignatureHistory = new Map()
-        options._simplifiedSignatureHistory = new Map()
         options._toolCallLogs = []
     }
 
     /**
-     * 更新工具调用追踪并检查限制
+     * 更新工具调用追踪并检查重复限制。
+     * 仅当本轮与上一轮的完全一致签名（工具名+参数逐一相同）相同时累计连续计数；
+     * 参数不一致即视为正常推进，不拦截也不告警。
      * @param {SendMessageOption} options
      * @param {Array} toolCalls
-     * @returns {string|undefined} 如果超过限制返回原因
+     * @returns {{exactRepeated: boolean}} 本轮是否与上一轮完全一致
      */
     updateToolCallTracking(options, toolCalls) {
-        // 递增轮次计数与总调用计数
-        options._consecutiveToolCallCount = (options._consecutiveToolCallCount || 0) + 1
-        options._totalToolCallCount = (options._totalToolCallCount || 0) + toolCalls.length
-
         // 完全一致签名：工具名+参数逐一相同
         const exactSignature = this.buildToolCallSignature(toolCalls)
         const exactRepeated = options._lastToolCallSignature === exactSignature
@@ -1896,23 +2025,8 @@ export class AbstractClient {
             options._lastToolCallSignature = exactSignature
             options._consecutiveIdenticalToolCallCount = 1
         }
-        let simplifiedRepeated = false
-        if (toolCalls.length === 1) {
-            const simplifiedSignature = this.buildSimplifiedSignature(toolCalls)
-            if (simplifiedSignature) {
-                simplifiedRepeated = options._lastSimplifiedSignature === simplifiedSignature
-                options._lastSimplifiedSignature = simplifiedSignature
-            }
-        } else {
-            options._lastSimplifiedSignature = undefined
-        }
 
-        if (exactRepeated && options._consecutiveIdenticalToolCallCount > 2) {
-            this.logger.warn(
-                `[Tool] 连续相同调用 #${options._consecutiveIdenticalToolCallCount}: ${toolCalls[0]?.function?.name || toolCalls[0]?.name}`
-            )
-        }
-        return { exactRepeated, simplifiedRepeated }
+        return { exactRepeated }
     }
 
     /**
@@ -1920,14 +2034,8 @@ export class AbstractClient {
      * @param {SendMessageOption} options
      */
     resetToolCallTracking(options) {
-        options._consecutiveToolCallCount = 0
         options._consecutiveIdenticalToolCallCount = 0
-        options._consecutiveSimilarToolCallCount = 0
-        options._totalToolCallCount = 0
         options._lastToolCallSignature = undefined
-        options._lastSimplifiedSignature = undefined
-        options._toolCallSignatureHistory?.clear()
-        options._simplifiedSignatureHistory?.clear()
     }
 
     /**
@@ -1999,49 +2107,6 @@ export class AbstractClient {
             .sort()
 
         return normalizedCalls.join('|')
-    }
-
-    /**
-     * @param {Array} toolCalls
-     * @returns {string}
-     */
-    buildSimplifiedSignature(toolCalls) {
-        return toolCalls
-            .map(tc => {
-                const name = tc.function?.name || ''
-                let args = tc.function?.arguments
-                if (typeof args === 'string') {
-                    try {
-                        args = JSON.parse(args)
-                    } catch {
-                        args = {}
-                    }
-                }
-                args = args || {}
-                if (name === 'execute_command' && args.command) {
-                    let cmd = args.command.trim().toLowerCase()
-                    cmd = cmd.replace(/^(rmdir|rd)\s+/i, 'DELETE_DIR ')
-                    cmd = cmd.replace(/^(dir|ls)\s*/i, 'LIST ')
-                    return `${name}:${cmd}`
-                }
-                const batchTools = [
-                    'send_group_message',
-                    'send_private_message',
-                    'send_message',
-                    'poke_user',
-                    'at_user',
-                    'set_group_card',
-                    'set_group_ban',
-                    'kick_group_member',
-                    'send_ai_voice'
-                ]
-                if (batchTools.includes(name)) {
-                    const targetId = args.group_id || args.user_id || args.target_id || ''
-                    return `${name}:${targetId}:${JSON.stringify(args)}`
-                }
-                return `${name}:${JSON.stringify(args)}`
-            })
-            .join('|')
     }
 
     getToolMatchesByName(tools, name) {
