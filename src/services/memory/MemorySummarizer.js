@@ -13,10 +13,6 @@ const logger = chatLogger
 
 /**
  * 记忆总结 Prompt 模板。
- *
- * 输出被 summarizeCategory 逐行拆开直接落库，因此必须是结构化行（[分类] 内容），
- * 并显式切断归纳、比较、解释等诱导思考链的措辞——思考过程一旦以文本形式流出
- * 就会被解析端误收为记忆（2026-09-17 线上事故）。
  * @constant {string}
  */
 const SUMMARY_PROMPT = `你是记忆整理器。你的唯一任务是输出整理后的记忆行，不要解释、不要推理，不要说"注意""所以""可以"之类的话。
@@ -29,10 +25,15 @@ const SUMMARY_PROMPT = `你是记忆整理器。你的唯一任务是输出整�
 {memories}
 
 【输出格式（必须严格遵守）】
-1. 每行一条记忆，行首必须以方括号标注分类，形如：[preference] 用户喜欢打游戏
-2. 方括号内的分类标识只能使用下列之一（写英文，不要翻译）：profile、preference、event、relation、topic、custom
-3. 除记忆行之外不输出任何内容：不要序号、标题、解释、分析过程、开场白或结尾语
-4. 合并后总行数必须少于现有记忆行数；确实无法合并时，把现有记忆逐条原样抄一遍（保持 [分类] 前缀）`
+1. 只输出一个 XML 文档，内容格式如下：
+<result>
+<memory category="{categoryLabel}"><![CDATA[记忆内容]]></memory>
+</result>
+2. 每个记忆一个 <memory> 元素，只写合并后要保留的用户记忆；CDATA 中只写记忆内容本身
+3. category 属性只写本次给的分类标识
+4. 猜测、推理、说明、标题、开场白、结尾语一律禁止
+5. 合并后总条数必须少于现有记忆条数；确实无法合并时，把现有记忆逐条原样抄一遍
+6. 不要输出任何 XML 之外的文字，不要用 Markdown 代码块包裹`
 
 const MEMORY_CATEGORY_PREFIX_PATTERN = /^\[([a-z]+)(?::[a-zA-Z0-9_-]+)?\]\s*[:：]?\s*(.+)$/i
 
@@ -70,14 +71,110 @@ const CONFLICT_PROMPT = `你是一个记忆管理助手，需要在两条冲突�
 结果：`
 
 /**
+ * 提取首个 XML 记忆文档。
+ * @param {string} text - 模型原始文本
+ * @returns {string|null} 无 XML 元素时返回 null
+ */
+function extractSummaryXml(text) {
+    const endTag = text.indexOf('</result>')
+    if (endTag >= 0 && text.slice(0, endTag).includes('<result')) {
+        return text.slice(0, Math.min(endTag + '</result>'.length, 65536))
+    }
+    const firstStart = text.indexOf('<memory')
+    const lastEnd = text.lastIndexOf('</memory>')
+    if (firstStart >= 0 && lastEnd > firstStart) {
+        return text.slice(firstStart, Math.min(lastEnd + '</memory>'.length, 65536))
+    }
+    return null
+}
+
+/**
+ * 解析 XML 记忆文档为纯文本条目。
+ * @param {string} content - summary XML 文档
+ * @returns {string[]} 去重后的记忆内容
+ */
+function parseSummaryXml(content) {
+    if (typeof content !== 'string' || content.length === 0) return []
+    const out = []
+    let current = null
+    let pos = 0
+
+    while (pos < content.length) {
+        const lt = content.indexOf('<', pos)
+        if (lt < 0) {
+            if (current) {
+                current.text += content.slice(pos)
+            }
+            break
+        }
+
+        // < 之前的普通文本，归属当前打开的条目
+        if (lt > pos && current) {
+            current.text += content.slice(pos, lt)
+        }
+        pos = lt
+
+        // CDATA 段：整体截取，越过后面的所有 < 与标记，直到 ]]>
+        if (content.startsWith('<![CDATA[', pos)) {
+            const bodyStart = pos + '<![CDATA['.length
+            const closeIdx = content.indexOf(']]>', bodyStart)
+            if (closeIdx >= 0) {
+                if (current) {
+                    current.text += content.slice(bodyStart, closeIdx)
+                }
+                pos = closeIdx + ']]>'.length
+            } else {
+                // 缺 CDATA 闭合：剩余全部视为损坏内容，等 </memory> 丢弃整条
+                if (current) {
+                    current.text += content.slice(bodyStart)
+                }
+                pos = content.length
+            }
+            continue
+        }
+
+        const tagEnd = content.indexOf('>', pos)
+        if (tagEnd < 0) {
+            if (current) {
+                current.text += content.slice(pos)
+            }
+            break
+        }
+
+        if (content.startsWith('</', pos)) {
+            const tag = content.slice(pos, tagEnd + 1)
+            const closeName = (tag.match(/^<\/([a-zA-Z0-9_-]+)/) || [])[1]?.toLowerCase()
+            if (closeName === 'result') {
+                break
+            }
+            if (closeName === 'memory' && current) {
+                if (current.text.trim() && isValidCategory(current.category)) {
+                    out.push(current.text.trim())
+                }
+                current = null
+            }
+            pos = tagEnd + 1
+            continue
+        }
+
+        // 开始标签：只关心 <memory ...>
+        if (content.startsWith('<memory', pos)) {
+            const attrs = content.slice(pos + '<memory'.length, tagEnd)
+            const catMatch = attrs.match(/\bcategory\s*=\s*["']([^"']+)["']/)
+            current = catMatch ? { category: catMatch[1].toLowerCase(), text: '' } : null
+            pos = tagEnd + 1
+            continue
+        }
+
+        // 其余标签（<result> 等）整段跳过
+        pos = tagEnd + 1
+    }
+
+    return out
+}
+
+/**
  * 将模型输出解析为可直接写入记忆库的纯文本条目。
- *
- * 双通道解析：
- * 1. 结构化行 `[category] 内容`（或 `[category:sub] 内容`，分类经白名单校验）
- *    直接采信——这是提示词要求的主通道；
- * 2. 自由文本行仅作兼容回退，过「思考过程过滤器」才保留；
- *    过滤锚点包括：推理词集中的行、短句内推理词密度过高、明显元叙述句式。
- * 模型把思考过程整段输出的坏 case（2026-09-17）会被两种通道共同拦截。
  *
  * @param {unknown} response - 模型原始输出
  * @returns {string[]} 去重后的记忆内容
@@ -85,6 +182,17 @@ const CONFLICT_PROMPT = `你是一个记忆管理助手，需要在两条冲突�
 export function parseMemorySummaryResponse(response) {
     const text = typeof response === 'string' ? response.trim() : ''
     if (!text) return []
+
+    const summaryXml = extractSummaryXml(text)
+    if (summaryXml) {
+        const xmlEntries = parseSummaryXml(summaryXml)
+        if (xmlEntries.length > 0) {
+            return [...new Set(xmlEntries)]
+        }
+        // 明显是 XML 记忆文档却拆不出合法条目：宁可整轮作废，
+        // 也不让 XML 标签文本经回退通道混进记忆库
+        return []
+    }
 
     let lines = text.split(/\r?\n/)
     if (text.startsWith('[')) {

@@ -53,26 +53,30 @@ function buildCategoryCatalog() {
 /**
  * 记忆提取 Prompt 模板。
  *
- * 输出格式与 parseExtractionResult 的 `/^\[([a-z]+):([a-z]+)\]\s*(.+)$/i` 严格耦合：
- * 方括号、冒号分隔与英文标识符不可改动，改动会让解析全部落空。
  * @constant {string}
  */
 const EXTRACTION_PROMPT = `你是一个记忆提取助手，负责从对话中提取关于“用户”的关键信息。
 
 【任务】分析对话内容，提取用户的个人信息并分类。
 
-【输出格式】每行一条记忆，严格写成：[分类:子类型] 内容
-分类与子类型必须原样使用下列英文标识，不要翻译、不要自造：
+【输出格式（必须严格遵守）】
+只输出一个 XML 文档，每条记忆一个 <memory> 元素：
+<result>
+<memory category="profile" sub_type="name"><![CDATA[用户叫小明]]></memory>
+</result>
+category/sub_type 必须原样使用下列英文标识，不要翻译、不要自造：
 
 ${buildCategoryCatalog()}
 
 【示例输出】
-[profile:name] 用户叫小明
-[profile:age] 用户25岁
-[preference:like] 用户喜欢打游戏
-[event:birthday] 用户的生日是3月15日
-[relation:friend] 小红是用户的朋友
-[topic:interest] 用户对AI技术感兴趣
+<result>
+<memory category="profile" sub_type="name"><![CDATA[用户叫小明]]></memory>
+<memory category="profile" sub_type="age"><![CDATA[用户25岁]]></memory>
+<memory category="preference" sub_type="like"><![CDATA[用户喜欢打游戏]]></memory>
+<memory category="event" sub_type="birthday"><![CDATA[用户的生日是3月15日]]></memory>
+<memory category="relation" sub_type="friend"><![CDATA[小红是用户的朋友]]></memory>
+<memory category="topic" sub_type="interest"><![CDATA[用户对AI技术感兴趣]]></memory>
+</result>
 
 【对话内容】
 每行以“用户:”或“AI:”开头，标明该条是谁说的。
@@ -83,8 +87,8 @@ ${buildCategoryCatalog()}
 - 每条一句话，写清主体是谁，避免只写“25岁”这样脱离主语的片段
 - 内容重复的只保留一条
 - 忽略与用户个人信息无关的闲聊
-- 每行必须以 [分类:子类型] 开头，不要加序号、不要用代码块包裹、不要写任何解释
-- 没有可提取的信息时，只输出一个字：无
+- 记忆内容必须包进 CDATA；XML 之外不要写任何解释、不要用 Markdown 代码块包裹
+- 没有可提取的信息时，输出：<result></result>
 
 提取结果：`
 
@@ -170,6 +174,11 @@ class MemoryExtractor {
      * 解析 LLM 提取结果
      */
     parseExtractionResult(result, userId, groupId = null) {
+        const xmlMemories = this.parseExtractionXml(result, userId, groupId)
+        if (xmlMemories.length > 0) {
+            return xmlMemories
+        }
+
         const memories = []
         const lines = result.split('\n').filter(line => line.trim())
 
@@ -217,6 +226,114 @@ class MemoryExtractor {
         }
 
         return memories
+    }
+
+    /**
+     * 解析 XML 提取结果为记忆对象。
+     * 只采信 <memory> 元素（category/sub_type 经白名单校验）的 CDATA 内容，
+     * 根外文字一概忽略；拆不出条目返回 []，由调用方回退旧的文本行协议。
+     *
+     * @param {string} xmlText - 模型原始输出
+     * @param {string} userId - 用户 ID
+     * @param {string|null} groupId - 群号
+     * @returns {Array} 通过校验的记忆对象（结构与 parseExtractionResult 行协议一致）
+     */
+    parseExtractionXml(xmlText, userId, groupId = null) {
+        if (typeof xmlText !== 'string' || xmlText.length === 0) {
+            return []
+        }
+
+        // 整篇没有 <memory 元素时无可提取
+        const firstStart = xmlText.indexOf('<memory')
+        if (firstStart < 0) {
+            return []
+        }
+        // 存在 </result> 时以根为止点；否则截到最后一个 </memory>
+        const rootEnd = xmlText.indexOf('</result>')
+        const scanEnd =
+            rootEnd >= 0
+                ? rootEnd
+                : (() => {
+                      const lastEnd = xmlText.lastIndexOf('</memory>')
+                      return lastEnd > firstStart ? lastEnd + '</memory>'.length : xmlText.length
+                  })()
+        const content = xmlText.slice(firstStart, Math.min(scanEnd, 65536))
+
+        const out = []
+        let current = null
+        let pos = 0
+
+        while (pos < content.length) {
+            const lt = content.indexOf('<', pos)
+            if (lt < 0) {
+                break
+            }
+            if (lt > pos && current) {
+                current.text += content.slice(pos, lt)
+            }
+            pos = lt
+
+            if (content.startsWith('<![CDATA[', pos)) {
+                const bodyStart = pos + '<![CDATA['.length
+                const closeIdx = content.indexOf(']]>', bodyStart)
+                if (closeIdx >= 0) {
+                    if (current) {
+                        current.text += content.slice(bodyStart, closeIdx)
+                    }
+                    pos = closeIdx + ']]>'.length
+                } else {
+                    if (current) {
+                        current.text += content.slice(bodyStart)
+                    }
+                    pos = content.length
+                }
+                continue
+            }
+
+            const tagEnd = content.indexOf('>', pos)
+            if (tagEnd < 0) {
+                break
+            }
+
+            if (content.startsWith('</', pos)) {
+                const tag = content.slice(pos, tagEnd + 1)
+                const closeName = (tag.match(/^<\/([a-zA-Z0-9_-]+)/) || [])[1]?.toLowerCase()
+                if (closeName === 'memory' && current) {
+                    if (current.text.trim()) {
+                        out.push({
+                            userId,
+                            groupId,
+                            category: current.category,
+                            subType: current.subType,
+                            content: current.text.trim(),
+                            confidence: 0.7,
+                            source: MemorySource.AUTO
+                        })
+                    }
+                    current = null
+                } else if (closeName === 'result') {
+                    break
+                }
+                pos = tagEnd + 1
+                continue
+            }
+
+            if (content.startsWith('<memory', pos)) {
+                const attrs = content.slice(pos + '<memory'.length, tagEnd)
+                const catMatch = attrs.match(/\bcategory\s*=\s*["']([^"']+)["']/)
+                const subMatch = attrs.match(/\bsub_type\s*=\s*["']([^"']+)["']/)
+                const category = catMatch ? catMatch[1].toLowerCase() : ''
+                const subType = subMatch ? subMatch[1].toLowerCase() : ''
+                current =
+                    category && this.isValidCategorySubType(category, subType) ? { category, subType, text: '' } : null
+                pos = tagEnd + 1
+                continue
+            }
+
+            pos = tagEnd + 1
+        }
+
+        return out
     }
 
     /**

@@ -56,3 +56,4 @@ frontend/
 .playwright-mcp/
 pnpm-lock.yaml
 .eslintcache
+.lsp-mcp/

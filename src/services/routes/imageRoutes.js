@@ -503,8 +503,6 @@ router.delete('/sources/:index', (req, res) => {
 
 export default router
 
-/* ==================== 公开图片访问路由（无需认证） ==================== */
-
 const IMAGE_DIR = path.join(__dirname, '../../../data/images')
 
 /**

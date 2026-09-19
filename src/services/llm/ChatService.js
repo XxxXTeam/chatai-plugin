@@ -15,6 +15,7 @@ import config from '../../../config/config.js'
 import { getAllTools, setToolContext } from '../../core/utils/toolAdapter.js'
 import { presetManager } from '../preset/PresetManager.js'
 import { memoryManager } from '../storage/MemoryManager.js'
+import { buildMemoryBlock, buildKnowledgeGraphBlock, getMemoryToolGuides } from './MemoryContextAssembly.js'
 import { getScopeManager } from '../scope/ScopeManager.js'
 import { databaseService } from '../storage/DatabaseService.js'
 import {
@@ -763,11 +764,12 @@ export class ChatService {
         }
         if (config.get('memory.enabled') && !skipPersona) {
             try {
-                await memoryManager.init()
-                const memoryContext = await memoryManager.getMemoryContext(userId, message || '', {
-                    event,
+                const memoryContext = await buildMemoryBlock({
+                    userId,
+                    cleanUserId,
                     groupId: groupId ? String(groupId) : null,
-                    includeProfile: true
+                    message: message || '',
+                    event
                 })
                 if (memoryContext) {
                     systemPrompt += memoryContext
@@ -822,14 +824,12 @@ export class ChatService {
         }
         if (config.get('memory.enabled') && !skipPersona) {
             try {
-                const { knowledgeGraphService } = await import('../storage/KnowledgeGraphService.js')
-                await knowledgeGraphService.init()
-                const graphContext = knowledgeGraphService.getKnowledgeContext(
-                    String(cleanUserId),
-                    groupId ? String(groupId) : null
-                )
+                const graphContext = await buildKnowledgeGraphBlock({
+                    userId: String(cleanUserId),
+                    groupId: groupId ? String(groupId) : null
+                })
                 if (graphContext) {
-                    systemPrompt += '\n\n' + graphContext
+                    systemPrompt += graphContext
                     logger.debug(`[ChatService] 已添加知识图谱上下文 (${graphContext.length} 字符)`)
                     if (debugInfo) {
                         debugInfo.memory.knowledgeGraph = {
@@ -895,6 +895,13 @@ export class ChatService {
         if (!skipPersona && skillDocumentInstructions) {
             systemPrompt += '\n\n' + skillDocumentInstructions
             logger.debug(`[ChatService] 已添加 SKILL.md 文档技能指令 (${skillDocumentInstructions.length} 字符)`)
+        }
+        if (config.get('memory.enabled') && !skipPersona && toolsAllowed && allTools.length > 0) {
+            const toolGuides = getMemoryToolGuides(allTools)
+            if (toolGuides) {
+                systemPrompt += '\n' + toolGuides
+                logger.debug(`[ChatService] 已注入记忆/知识图谱工具使用指南 (${toolGuides.length} 字符)`)
+            }
         }
         let validHistory = history.filter(msg => {
             if (msg.role === 'assistant') {
@@ -1041,29 +1048,19 @@ export class ChatService {
         )
 
         try {
-            // 并发计数必须在 try 内递增，否则中途抛错会跳过 finally 的 endRequest，
-            // 导致该渠道计数单调递增、被 least-connection 调度永久判定为满载
             if (channel) {
                 channelManager.startRequest(channel.id)
             }
 
             if (event && event.reply) {
-                // 中间句回调：模型带工具调用的那一轮若同时输出文本（含纯文本思考/进度说明），
-                // 在执行工具前先行回给用户；只发工具不说话的轮次回一条轻量进度提示，
-                // 避免多轮工具调用期间用户长时间无反馈
-                const toolsSummary = client.tools?.length
-                    ? `（正在调用 ${client.tools.length} 个可用工具中的某一个…）`
-                    : ''
                 client.setOnMessageWithToolCall(async data => {
                     if (data?.intermediateText && data.isIntermediate) {
-                        let text = data.intermediateText.trim()
+                        const text = data.intermediateText.trim()
                         if (text) {
                             if (this.isPureToolCallJson(text)) {
                                 return
                             }
                             await event.reply(text, true)
-                        } else if (toolsSummary) {
-                            await event.reply(toolsSummary, true)
                         }
                     } else if (data?.type === 'text' && data.text) {
                         await event.reply(data.text, true)

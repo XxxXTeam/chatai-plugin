@@ -367,6 +367,41 @@ test('总结输出解析会移除围栏、编号和说明前缀', () => {
     ])
 })
 
+test('总结输出解析优先吃 XML 记忆文档，根外文字不入库', () => {
+    const input = `好的，下面是整理后的记忆：
+<result>
+<memory category="preference"><![CDATA[用户喜欢玩梗，如卢本伟番茄连招]]></memory>
+<memory category="preference"><![CDATA[用户喜欢角色扮演]]></memory>
+</result>
+完成。`
+    assert.deepEqual(parseMemorySummaryResponse(input), ['用户喜欢玩梗，如卢本伟番茄连招', '用户喜欢角色扮演'])
+})
+
+test('XML 记忆文档是坏条目时宁可作废也不回退把标签文本入库', () => {
+    const input = `<result>
+<memory category="unknown"><![CDATA[内容X]]></memory>
+</result>`
+    assert.deepEqual(parseMemorySummaryResponse(input), [])
+})
+
+test('模型把思考文字写进 CDATA 时按条目原文保留', () => {
+    const input = `<result>
+<memory category="preference"><![CDATA[但注意"残花御姐姐"可能是"残花御姐姐"还是"残花御姐姐"？ 我们可保留]]></memory>
+<memory category="preference"><![CDATA[用户喜欢玩梗，如卢本伟番茄连招]]></memory>
+</result>`
+    assert.deepEqual(parseMemorySummaryResponse(input), [
+        '但注意"残花御姐姐"可能是"残花御姐姐"还是"残花御姐姐"？ 我们可保留',
+        '用户喜欢玩梗，如卢本伟番茄连招'
+    ])
+})
+
+test('多个且未包根的 CDATA memory 段也能逐条正确切分', () => {
+    const input = `<result>
+<memory category="event"><![CDATA[计划明天]]>去<![CDATA[红树林玩]]></memory>
+</result>`
+    assert.deepEqual(parseMemorySummaryResponse(input), ['计划明天去红树林玩'])
+})
+
 test('统一提取 OpenAI、Claude 和 Gemini 响应文本', async () => {
     assert.equal(await extractMemoryLLMText({ choices: [{ message: { content: 'OpenAI 文本' } }] }), 'OpenAI 文本')
     assert.equal(await extractMemoryLLMText({ content: [{ type: 'text', text: 'Claude 文本' }] }), 'Claude 文本')
