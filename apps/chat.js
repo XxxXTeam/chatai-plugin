@@ -721,11 +721,14 @@ export class Chat extends plugin {
                             }
                         }
                     }
-
-                    // 分段回复模式（非伪人模式也支持按句输出）
                     if (!handled && replyTextContent) {
+                        const toolWrapperFiltered = this.formatReplyTextOnly(result.response)
+                        const toolWrapperNoise =
+                            toolWrapperFiltered !== null &&
+                            (this.isLikelyToolWrapperText(toolWrapperFiltered) ||
+                                this.hasToolLikeSegment(toolWrapperFiltered))
                         const sentenceOutputCfg = config.get('output.sentenceOutput') || {}
-                        if (sentenceOutputCfg.enabled && sentenceOutputCfg.chatEnabled !== false) {
+                        if (sentenceOutputCfg.enabled && sentenceOutputCfg.chatEnabled !== false && !toolWrapperNoise) {
                             const sentences = this.splitIntoSentences(replyTextContent)
                             if (sentences.length > 1) {
                                 for (let i = 0; i < sentences.length; i++) {
@@ -749,8 +752,17 @@ export class Chat extends plugin {
 
                     // 默认直接输出
                     if (!handled) {
-                        const replyResult = await this.reply(replyContent, quoteReply)
-                        this.handleAutoRecall(replyResult, false)
+                        const pureText = this.formatReplyTextOnly(result.response) ?? ''
+                        const isToolNoise =
+                            pureText.length > 0 &&
+                            (this.isLikelyToolWrapperText(pureText) || this.hasToolLikeSegment(pureText))
+                        if (isToolNoise) {
+                            // 整段都是工具调用残段，不当作最终回复发出
+                            logger.debug('[Chat] 已抑制工具调用残段输出')
+                        } else {
+                            const replyResult = await this.reply(replyContent, quoteReply)
+                            this.handleAutoRecall(replyResult, false)
+                        }
                     }
 
                     // 表情包小偷
@@ -857,6 +869,21 @@ export class Chat extends plugin {
             }
         }
         return messages.length > 0 ? messages : null
+    }
+
+    /**
+     * 提取 response 中的纯文本内容（供工具残段检测复用）
+     * @param {Array} response - 模型回复（content 数组）
+     * @returns {string|null} 文本或 null
+     */
+    formatReplyTextOnly(response) {
+        if (!Array.isArray(response)) return null
+        const text = response
+            .filter(c => c?.type === 'text')
+            .map(c => c.text || '')
+            .join('\n')
+            .trim()
+        return text || null
     }
 
     /**
@@ -1169,5 +1196,28 @@ export class Chat extends plugin {
      */
     async sendForwardMsg(title, messages) {
         return platformSendForwardMsg(this.e, title, messages)
+    }
+
+    /**
+     * 判断文本是否像"被拆成段的工具调用包裹文本"。
+     * 某些渠道（如 codex 类）的适配器会输出含 tool_call 标记的分段文本，
+     * 展示层要抑制这类噪音，不产生"1. 2. 3."的残破消息。
+     * @param {unknown} text - 输入文本
+     * @returns {boolean} 是否应为工具文本包裹
+     */
+    isLikelyToolWrapperText(text) {
+        const t = String(text ?? '').trim()
+        if (!t || t.length > 120) return false
+        if (/\n/.test(t)) return false
+        return /^[\d.（(【[、:：\-—\s]*$/.test(t) || /^[a-z_]{2,}[（(]?[：:]?$/.test(t)
+    }
+
+    /**
+     * 判断文本是否含工具调用结构化字段。
+     * @param {unknown} text - 输入文本
+     * @returns {boolean} 含 tool_call/function/arguments 等标记
+     */
+    hasToolLikeSegment(text) {
+        return /\b(tool_call|function|arguments)\b/.test(String(text || ''))
     }
 }
