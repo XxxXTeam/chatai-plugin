@@ -37,7 +37,7 @@ jobs:
             npm install
           fi
       - name: Build frontend
-        run: npm run export -- --copy-only
+        run: npm run export copy-only
 
       ## 验证构建产物
       - name: Verify build output
