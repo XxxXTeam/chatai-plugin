@@ -27,7 +27,7 @@ export const BUILTIN_PRESETS = [
 - 涉及敏感话题时保持中立
 - 回复简洁明了，避免冗长
 
-当前时间: {{datetime}}`,
+当前时间: {{datetime_min}}(需要秒级精确时间时,调用 get_current_time 工具)`,
         modelParams: {
             temperature: 0.7,
             max_tokens: 4096

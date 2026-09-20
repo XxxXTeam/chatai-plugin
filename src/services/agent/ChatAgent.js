@@ -30,11 +30,12 @@ import { resolveToolPermission } from '../tools/ToolPermission.js'
  * @constant {string}
  */
 const TOOL_USAGE_PRINCIPLES = `【工具使用原则】
-- 请求涉及实时数据（时间、天气、群信息、用户信息、新闻等）时，先调用工具取到数据，再基于数据回答，不要凭印象作答
-- 请求要求执行动作（发消息、禁言、踢人、发图、搜索等）时，直接调用对应工具
-- 能通过工具拿到更准确结果时，优先调用工具
-- 不确定答案时，先用搜索或相关工具查证
-- 只有纯闲聊、创作、情感交流这类不需要外部数据的场景，才直接回复`
+- 涉及实时或可变数据（当前时间、日期、天气、群资料、群成员、用户资料、消息记录、新闻、价格、热搜等）时，必须先调用对应工具取到最新数据再回答，严禁凭训练数据或印象直接作答
+- 关于「当前用户」「当前群」「本机器人」的一切事实（昵称、权限、群规、历史消息、彼此关系、记忆等），只能来自工具返回与上下文；不知道就查，查不到就明确说明，禁止编造
+- 需要执行动作（发消息、禁言、踢人、发图、搜索、保存等）时，直接调用工具完成，不要用文字描述替代执行
+- 工具调用失败时：简短说明失败原因，可换一个相关工具再试一次；绝对不要假装成功，也不要展示虚构的返回结果
+- 只有纯闲聊、自由创作、情感陪伴、观点讨论这类不需要外部数据的场景，才可不调用工具直接回复
+- 一次回答可以连续调用多个工具：先搜集完整数据，再基于真实返回作答`
 
 /**
  * 记忆工具使用说明。
@@ -42,10 +43,10 @@ const TOOL_USAGE_PRINCIPLES = `【工具使用原则】
  * @constant {string}
  */
 const MEMORY_TOOL_GUIDE = `【记忆管理】
-- 用户透露个人信息（名字、生日、喜好、位置、职业等），或你判断某条信息值得长期记住时，调用 save_user_memory 保存
-- 用户明确说“记住”“别忘了”时，必须调用 save_user_memory
-- 回答涉及用户个人信息的问题前，先用 get_user_memories 或 search_user_memory 查询，不要凭空作答
-- 用户纠正此前说过的信息时，用 update_user_memory 更新对应记忆，而不是再存一条新的`
+- 回答任何涉及「你对我/对本群知道什么」「我之前说过什么」的问题前，必须先调用 get_user_memories 或 search_user_memory 查询，拿到真实记忆再回答，不要凭空作答
+- 用户透露个人信息（名字、生日、喜好、位置、职业等），或你判断某条信息值得长期记住时，主动调用 save_user_memory 保存；用户明确说“记住”“别忘了”时，必须调用 save_user_memory
+- 保存前可先查询已有记忆：内容相同或已存在时不要重复保存，避免记忆冗余
+- 用户纠正此前说过的信息时，用 update_user_memory 更新对应记忆，而不是再存一条新的；用户明确表示某条记忆作废时，用 delete_user_memory 删除`
 
 /**
  * 知识图谱工具使用说明。
@@ -53,15 +54,34 @@ const MEMORY_TOOL_GUIDE = `【记忆管理】
  * @constant {string}
  */
 const KNOWLEDGE_GRAPH_TOOL_GUIDE = `【知识图谱维护】
-- 对话中确认了用户/群成员之间的事实（身份、关系、喜好、事件等）时，用 kg_save_entity / kg_save_relation 写入图谱
-- 回答涉及"你和谁是什么关系""之前说过什么"这类结构性问题前，先用 kg_search_entities 或 kg_get_knowledge 查询，不要凭空作答
-- 用户纠正或推翻之前的说法时，用 kg_update_entity 更新对应实体，不要新建重复节点`
+- 对话中确认了用户/群成员之间的事实（身份、关系、喜好、事件等）时，主动用 kg_save_entity / kg_save_relation 写入图谱；发现新事实就写，不要等用户要求
+- 回答涉及"你和谁是什么关系""之前说过什么""群里有哪些人物/话题"这类结构性问题前，先用 kg_get_knowledge / kg_search_entities / kg_list_entities 查询，不要凭空作答
+- 用户纠正或推翻之前的说法时，用 kg_update_entity 更新对应实体，不要新建重复节点；用户明确表示某信息作废时，用 kg_delete_entity 删除`
 
 /** 记忆相关工具名，用于判断是否需要注入 MEMORY_TOOL_GUIDE */
-const MEMORY_TOOL_NAMES = ['save_user_memory', 'get_user_memories', 'search_user_memory', 'update_user_memory']
+const MEMORY_TOOL_NAMES = [
+    'save_user_memory',
+    'get_user_memories',
+    'search_user_memory',
+    'update_user_memory',
+    'delete_user_memory'
+]
 
 /** 知识图谱相关工具名，用于判断是否需要注入 KNOWLEDGE_GRAPH_TOOL_GUIDE */
-const KNOWLEDGE_GRAPH_TOOL_NAMES = ['kg_get_knowledge', 'kg_save_entity', 'kg_search_entities', 'kg_save_relation']
+const KNOWLEDGE_GRAPH_TOOL_NAMES = [
+    'kg_get_knowledge',
+    'kg_list_entities',
+    'kg_search_entities',
+    'kg_save_entity',
+    'kg_update_entity',
+    'kg_delete_entity',
+    'kg_entity_history',
+    'kg_entity_relations',
+    'kg_save_relation',
+    'kg_delete_relation',
+    'kg_query_subgraph',
+    'kg_stats'
+]
 
 let _scopeManager = null
 async function ensureScopeManager() {
@@ -878,7 +898,8 @@ export class ChatAgent {
      */
     _buildFullDispatchPrompt(toolGroupManager, contextOptions = {}) {
         const summary = toolGroupManager.getGroupSummary(contextOptions)
-        let prompt = `你是智能任务调度器。分析用户请求，选择需要的工具组。原则：只要请求可能需要数据或操作，就选择工具组；只有纯问候闲聊才用 chat。
+        let prompt = `你是智能任务调度器。分析用户请求，选择需要的工具组。原则：只要请求涉及实时数据、查证事实或需要执行操作（查询、搜索、发消息、群管理、保存记忆等），都必须选择对应工具组；宁可多选一个工具组，也不要因为不确定而走 chat。
+chat 组仅限纯问候闲聊（你好/谢谢/再见等）；凡涉及数据获取、状态查询、动作执行的内容，一律不得使用 chat。
 
 ## 可用工具组：
 `
@@ -1118,7 +1139,7 @@ export class ChatAgent {
         /* 能力清单随分组是否可用而变，其后的使用原则两种模式完全一致 */
         const header = groupPrompt
             ? `【可用技能】\n你拥有 ${tools.length} 个工具，按功能分组如下：\n${groupPrompt}`
-            : `【可用工具能力】\n你拥有 ${tools.length} 个工具可调用。`
+            : `【可用工具能力】\n你拥有 ${tools.length} 个工具可调用。\n${this._buildToolNamesFallback(Array.from(availableNames))}`
 
         const sections = [header, TOOL_USAGE_PRINCIPLES]
 
@@ -1178,6 +1199,31 @@ export class ChatAgent {
             logger.debug(`[ChatAgent] 构建技能分组提示失败: ${err.message}`)
             return null
         }
+    }
+
+    /**
+     * 兜底工具清单：skills.yaml 分组不可用时，按名称排序列出可用工具名，
+     * 让模型在系统提示里也能看到能力目录，而不是只拿到一个工具数量。
+     * 上限约 800 字符，超出截断并加省略标记。
+     * @param {string[]} availableNames - 当前可用工具名数组
+     * @returns {string} 工具清单文本
+     */
+    _buildToolNamesFallback(availableNames) {
+        if (!availableNames || availableNames.length === 0) return ''
+
+        const sorted = Array.from(new Set(availableNames)).sort()
+        const MAX_CHARS = 800
+        const MAX_TOOLS = 60
+
+        let text = `工具清单（按名称排序）: ${sorted.slice(0, MAX_TOOLS).join(', ')}`
+        if (sorted.length > MAX_TOOLS) {
+            text += ` 等共${sorted.length}个`
+        }
+
+        if (text.length > MAX_CHARS) {
+            text = `${text.substring(0, MAX_CHARS - 3)}...`
+        }
+        return `\n${text}`
     }
 
     /**

@@ -298,7 +298,8 @@ export async function parseUserMessage(e, options = {}) {
                                             type: 'image',
                                             image: imageData.base64,
                                             mimeType: imageData.mimeType,
-                                            source: 'message'
+                                            source: 'message',
+                                            inline: true
                                         })
                                     } else {
                                         // 下载失败时记录文本
@@ -317,14 +318,16 @@ export async function parseUserMessage(e, options = {}) {
                                     contents.push({
                                         type: 'image',
                                         image: imageData.base64,
-                                        mimeType: imageData.mimeType
+                                        mimeType: imageData.mimeType,
+                                        inline: true
                                     })
                                 }
                             } else if (imgUrl.startsWith('base64://')) {
                                 contents.push({
                                     type: 'image',
                                     image: imgUrl.replace('base64://', ''),
-                                    mimeType: 'image/png'
+                                    mimeType: 'image/png',
+                                    inline: true
                                 })
                             } else {
                                 const imageData = await fetchImage(imgUrl)
@@ -332,7 +335,8 @@ export async function parseUserMessage(e, options = {}) {
                                     contents.push({
                                         type: 'image',
                                         image: imageData.base64,
-                                        mimeType: imageData.mimeType
+                                        mimeType: imageData.mimeType,
+                                        inline: true
                                     })
                                 }
                             }

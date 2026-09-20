@@ -1085,7 +1085,7 @@ function isUnsupportedImageMime(mimeType, clientType) {
  * @returns {Promise<{mimeType: string, data: Buffer} | null>}
  */
 async function transcodeImageForClient(input, mimeType, clientType, label = '') {
-    const { supported, target, staticFallback } = getImageSendPolicy(clientType)
+    const { supported, target } = getImageSendPolicy(clientType)
     const normalized = mimeType?.toLowerCase()
     if (!normalized || !normalized.startsWith('image/') || supported.includes(normalized)) {
         return { mimeType: normalized, data: input }
@@ -1241,7 +1241,25 @@ export async function preprocessMediaToBase64(histories, options = {}) {
                         item.image_url?.url &&
                         !item.image_url.url.startsWith('data:')
                     ) {
-                        const { mimeType, data, error } = await urlToBase64(item.image_url.url, 'image/jpeg')
+                        // 兼容 "base64:<原文>" 前缀：剥头还原为原始 URL 或 data URL
+                        let imageUrlValue = item.image_url.url
+                        if (imageUrlValue.startsWith('base64:')) {
+                            const rawValue = imageUrlValue.slice('base64:'.length)
+                            if (rawValue.startsWith('data:')) {
+                                imageUrlValue = rawValue
+                            } else if (
+                                /^https?:\/\//i.test(rawValue) ||
+                                rawValue.startsWith('file://') ||
+                                rawValue.startsWith('/')
+                            ) {
+                                imageUrlValue = rawValue
+                            } else {
+                                newContent.push({ type: 'text', text: '[不支持的图片已跳过]' })
+                                logger.debug('[MediaPreprocess] 非法base64前缀图片跳过')
+                                continue
+                            }
+                        }
+                        const { mimeType, data, error } = await urlToBase64(imageUrlValue, 'image/jpeg')
                         if (data && !error) {
                             if (clientType && isUnsupportedImageMime(mimeType, clientType)) {
                                 const transcoded = await transcodeImageValueForClient(

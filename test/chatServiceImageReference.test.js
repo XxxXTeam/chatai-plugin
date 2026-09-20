@@ -14,10 +14,10 @@ test('ChatService 将 messageParser 的裸 base64 图片对象转换为 data URL
     assert.equal(
         normalizeInlineImageDataUrl({
             type: 'image',
-            image: '/9j/example',
+            image: '/9j/4A==',
             mimeType: 'image/jpeg'
         }),
-        'data:image/jpeg;base64,/9j/example'
+        'data:image/jpeg;base64,/9j/4A=='
     )
 })
 

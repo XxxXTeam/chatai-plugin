@@ -10,6 +10,7 @@ import { LlmService } from './LlmService.js'
 import { imageService } from '../media/ImageService.js'
 import { contextManager, buildGroupEnvironmentPrompt, AUTO_CLEAN_NOTICE } from './ContextManager.js'
 import { channelManager } from './ChannelManager.js'
+import { computeDelay, classifyRetryError, expectRetryable, pickChannelRetryPolicy } from './BackoffPolicy.js'
 import historyManager from '../../core/utils/history.js'
 import config from '../../../config/config.js'
 import { getAllTools, setToolContext } from '../../core/utils/toolAdapter.js'
@@ -33,6 +34,7 @@ import { resolveTemperature } from './TemperatureResolver.js'
 import { applySkillToolConstraints, getSkillToolConstraints } from '../skills/SkillToolConstraints.js'
 import { resolveToolPermission } from '../tools/ToolPermission.js'
 import { normalizeInlineImageContent } from './InlineImageDataUrl.js'
+import { PromptCacheService } from './PromptCacheService.js'
 
 let scopeManager = null
 const ensureScopeManager = async () => {
@@ -252,6 +254,23 @@ export class ChatService {
                     if (inlineImage) {
                         messageContent.push(inlineImage)
                         continue
+                    } else if (
+                        imageRef?.type === 'image' &&
+                        (imageRef.url || imageRef.image?.startsWith?.('base64:'))
+                    ) {
+                        // 归一化否决的内联图：带 http/file/绝对路径的原 URL，按 URL 预检走全渠道路径
+                        const urlValue = imageRef.url || imageRef.image.slice('base64:'.length)
+                        if (
+                            /^https?:\/\//i.test(urlValue) ||
+                            urlValue.startsWith('file://') ||
+                            urlValue.startsWith('/')
+                        ) {
+                            const prepared = await imageService.prepareImageForApi(urlValue, { timeout: 8000 })
+                            if (prepared.url) {
+                                messageContent.push({ type: 'image_url', image_url: { url: prepared.url } })
+                            }
+                            continue
+                        }
                     } else if (imageRef.type === 'image_url' && imageRef.image_url?.url) {
                         // 预检可达性；QQ图床/内网等需转 base64，否则远端读不到
                         const prepared = await imageService.prepareImageForApi(imageRef.image_url.url, {
@@ -285,6 +304,21 @@ export class ChatService {
                 // 字符串格式处理
                 if (typeof imageRef === 'string') {
                     // 如果是HTTP URL，先预检可达性，QQ图床/内网转 base64
+                    if (imageRef.startsWith('base64:')) {
+                        // NormalizeURL 层把外链改写成的 base64:<原文> 前缀：剥头还原为 URL 走预检
+                        const rawValue = imageRef.slice('base64:'.length)
+                        if (
+                            /^https?:\/\//i.test(rawValue) ||
+                            rawValue.startsWith('file://') ||
+                            rawValue.startsWith('/')
+                        ) {
+                            const prepared = await imageService.prepareImageForApi(rawValue, { timeout: 8000 })
+                            if (prepared.url) {
+                                messageContent.push({ type: 'image_url', image_url: { url: prepared.url } })
+                            }
+                            continue
+                        }
+                    }
                     if (imageRef.startsWith('http://') || imageRef.startsWith('https://')) {
                         const prepared = await imageService.prepareImageForApi(imageRef, { timeout: 8000 })
                         if (prepared.url) {
@@ -1148,7 +1182,11 @@ export class ChatService {
                 const notifyOnFallback = fallbackConfig.notifyOnFallback
                 const enableChannelSwitch = fallbackConfig.enableChannelSwitch !== false // 默认启用渠道切换
                 const enableKeyRotation = fallbackConfig.enableKeyRotation !== false // 默认启用Key轮换
-                const emptyRetries = fallbackConfig.emptyRetries || 2 // 空响应重试次数
+                const emptyRetries = fallbackConfig.emptyRetries ?? 2 // 空响应重试次数（0 表示禁用空重试）
+                // 重试抖动比例，钳制到 [0, 0.8]；0 表示无抖动
+                const retryJitter = Math.max(0, Math.min(0.8, Number(fallbackConfig.retryJitter ?? 0.3)))
+                // 全局兜底退避策略（渠道级 retry.backoff 缺失时使用）
+                const fallbackBackoff = fallbackConfig.backoff || 'exponential'
 
                 const modelsToTry = [llmModel, ...fallbackModels.filter(m => m && m !== llmModel)]
                 let response = null
@@ -1217,6 +1255,8 @@ export class ChatService {
                     let emptyRetryCount = 0
                     let currentClient = client
                     let currentChannel = isMainModel ? channel : null
+                    // 渠道连续失败计数（请求抛错或空返回都计入），达到渠道级 retry.maxAttempts 后优先切换渠道
+                    const channelFailStreak = new Map()
 
                     // 备选模型：只有在主模型的所有渠道都已耗尽后才使用
                     if (!isMainModel) {
@@ -1293,7 +1333,11 @@ export class ChatService {
                                 model: currentModelMapping.actualModel,
                                 systemOverride: promptState.systemPrompt,
                                 systemPromptConfig: promptState.systemPromptConfig,
-                                toolChoice: resolveToolChoiceForChannel(currentChannel)
+                                toolChoice: resolveToolChoiceForChannel(currentChannel),
+                                // 渠道级提示词缓存键：同渠道复用同一键维持服务商 prompt 缓存前缀
+                                ...(currentChannel?.id
+                                    ? { promptCacheKey: PromptCacheService.getPromptCacheKey(currentChannel.id) }
+                                    : {})
                             }
                             response = await currentClient.sendMessage(userMessage, currentRequestOptions)
                             if (response?.model) {
@@ -1309,11 +1353,30 @@ export class ChatService {
                             if (response && hasAnyContent) {
                                 // 检查是否为空文本响应（无工具调用且无文本）
                                 if (!hasToolCallLogs && !hasTextContent && emptyRetryCount < emptyRetries) {
+                                    // 空文本计入渠道连续失败（触发渠道级 retry.maxAttempts 强制切换）
+                                    if (currentChannel) {
+                                        channelFailStreak.set(
+                                            currentChannel.id,
+                                            (channelFailStreak.get(currentChannel.id) || 0) + 1
+                                        )
+                                    }
                                     emptyRetryCount++
                                     logger.warn(
                                         `[ChatService] 模型 ${currentModel} 返回空文本，重试第${emptyRetryCount}次...`
                                     )
-                                    await new Promise(r => setTimeout(r, retryDelay * emptyRetryCount))
+                                    const retryPolicy = pickChannelRetryPolicy(
+                                        currentChannel,
+                                        retryDelay,
+                                        fallbackBackoff
+                                    )
+                                    const delay = computeDelay(emptyRetryCount, {
+                                        backoff: retryPolicy.backoff,
+                                        baseDelay: retryPolicy.delay,
+                                        maxDelay: 10000,
+                                        jitterRatio: retryJitter
+                                    })
+                                    logger.debug(`[ChatService] 空文本退避 ${delay}ms (${retryPolicy.backoff})`)
+                                    await new Promise(r => setTimeout(r, delay))
                                     continue
                                 }
 
@@ -1332,6 +1395,8 @@ export class ChatService {
                                 // 成功后重置渠道错误计数
                                 if (currentChannel) {
                                     channelManager.resetChannelError(currentChannel.id)
+                                    // 原渠道成功（含原地重试成功），重置该渠道连续失败计数
+                                    channelFailStreak.delete(currentChannel.id)
                                 }
                                 // 同步追踪变量用于统计记录
                                 syncTrackingVars()
@@ -1339,12 +1404,27 @@ export class ChatService {
                             }
 
                             // 空响应处理
+                            // 空返回计入渠道连续失败（触发渠道级 retry.maxAttempts 强制切换）
+                            if (currentChannel) {
+                                channelFailStreak.set(
+                                    currentChannel.id,
+                                    (channelFailStreak.get(currentChannel.id) || 0) + 1
+                                )
+                            }
                             emptyRetryCount++
                             if (emptyRetryCount <= emptyRetries) {
                                 logger.warn(
                                     `[ChatService] 模型 ${currentModel} 返回空响应，重试第${emptyRetryCount}次...`
                                 )
-                                await new Promise(r => setTimeout(r, retryDelay * emptyRetryCount))
+                                const retryPolicy = pickChannelRetryPolicy(currentChannel, retryDelay, fallbackBackoff)
+                                const delay = computeDelay(emptyRetryCount, {
+                                    backoff: retryPolicy.backoff,
+                                    baseDelay: retryPolicy.delay,
+                                    maxDelay: 10000,
+                                    jitterRatio: retryJitter
+                                })
+                                logger.debug(`[ChatService] 空响应退避 ${delay}ms (${retryPolicy.backoff})`)
+                                await new Promise(r => setTimeout(r, delay))
                                 continue
                             }
 
@@ -1452,7 +1532,117 @@ export class ChatService {
                                 }
                             }
 
-                            // 无法切换Key或渠道，但仍有重试次数时继续重试（单渠道单Key场景）
+                            // 重置空响应计数，给重试一个机会
+                            // 渠道级 retry.maxAttempts 接通：同渠道连续失败达到阈值时，优先切换 Key/渠道
+                            // （受 keySwitchCount/maxKeySwitches 与 channelsTriedForMainModel 约束防循环），无可切换才原地重试
+                            emptyRetryCount = 0
+
+                            const channelMaxAttempts = currentChannel?.retry?.maxAttempts ?? maxRetries
+                            const streak = currentChannel ? channelFailStreak.get(currentChannel.id) || 0 : 0
+                            if (currentChannel && streak >= channelMaxAttempts) {
+                                logger.warn(
+                                    `[ChatService] 渠道 ${currentChannel.name} 连续失败 ${streak} 次(阈值 ${channelMaxAttempts})，优先尝试切换`
+                                )
+                                if (
+                                    enableKeyRotation &&
+                                    currentKeyIndex >= 0 &&
+                                    retryStats.keySwitchCount < maxKeySwitches
+                                ) {
+                                    const nextKey = channelManager.getNextAvailableKey(
+                                        currentChannel.id,
+                                        currentKeyIndex,
+                                        getTriedKeys(currentChannel.id)
+                                    )
+                                    if (nextKey) {
+                                        logger.info(
+                                            `[ChatService] 渠道连续失败后切换Key: ${currentChannel.name} Key#${currentKeyIndex + 1} -> Key#${nextKey.keyIndex + 1}`
+                                        )
+                                        switchChain.push({
+                                            type: 'key',
+                                            channel: currentChannel.name,
+                                            fromKey: currentKeyIndex + 1,
+                                            toKey: nextKey.keyIndex + 1,
+                                            reason: 'empty'
+                                        })
+                                        retryStats.keySwitchCount++
+                                        currentKeyIndex = nextKey.keyIndex
+                                        markKeyTried(currentChannel.id, currentKeyIndex)
+                                        const newClientOptions = {
+                                            ...clientOptions,
+                                            apiKey: nextKey.key,
+                                            keyIndex: nextKey.keyIndex,
+                                            customHeaders:
+                                                currentChannel?.customHeaders || clientOptions.customHeaders || {},
+                                            headersTemplate: currentChannel?.headersTemplate || '',
+                                            requestBodyTemplate: currentChannel?.requestBodyTemplate || '',
+                                            systemPromptConfig: currentChannel?.systemPromptConfig || null,
+                                            toolChoice: resolveToolChoiceForChannel(currentChannel)
+                                        }
+                                        currentClient = await LlmService.createClient(newClientOptions)
+                                        // 切Key不重置渠道失败连续计数（渠道故障不只与Key相关）
+                                        switched = true
+                                        continue
+                                    }
+                                }
+                                if (!switched && enableChannelSwitch && isMainModel) {
+                                    const altChannels = channelManager
+                                        .getAvailableChannels(currentModel, {
+                                            excludeChannelId: currentChannel?.id
+                                        })
+                                        .filter(ch => !retryStats.channelsTriedForMainModel.has(ch.id))
+                                    if (altChannels.length > 0) {
+                                        const altChannel = altChannels[0]
+                                        const altKeyInfo = channelManager.getChannelKey(altChannel)
+                                        logger.info(
+                                            `[ChatService] 渠道连续失败后切换渠道: ${currentChannel?.name} -> ${altChannel.name}`
+                                        )
+                                        switchChain.push({
+                                            type: 'channel',
+                                            from: currentChannel?.name,
+                                            to: altChannel.name,
+                                            reason: 'empty'
+                                        })
+                                        currentChannel = altChannel
+                                        currentKeyIndex = altKeyInfo.keyIndex
+                                        channelSwitched = true
+                                        retryStats.channelsTriedForMainModel.add(altChannel.id)
+                                        markKeyTried(altChannel.id, currentKeyIndex)
+                                        const altClientOptions = {
+                                            ...clientOptions,
+                                            adapterType: altChannel.adapterType,
+                                            baseUrl: altChannel.baseUrl,
+                                            apiKey: altKeyInfo.key,
+                                            keyIndex: altKeyInfo.keyIndex,
+                                            imageConfig: altChannel.imageConfig || clientOptions.imageConfig,
+                                            timeout: altChannel.timeout || clientOptions.timeout,
+                                            chatPath: altChannel.chatPath || '',
+                                            modelsPath: altChannel.modelsPath || '',
+                                            responsePath:
+                                                altChannel.responsePath || altChannel.endpoints?.responses || '',
+                                            endpoints: altChannel.endpoints || {},
+                                            apiInterface:
+                                                altChannel.apiInterface || altChannel.openaiApiInterface || 'chat',
+                                            openaiApiInterface:
+                                                altChannel.apiInterface || altChannel.openaiApiInterface || 'chat',
+                                            experimental: altChannel.experimental || {},
+                                            openaiResponses: altChannel.openaiResponses || {},
+                                            customHeaders: altChannel.customHeaders || {},
+                                            headersTemplate: altChannel.headersTemplate || '',
+                                            requestBodyTemplate: altChannel.requestBodyTemplate || '',
+                                            systemPromptConfig: altChannel.systemPromptConfig || null,
+                                            ...resolveThinkingOptions(altChannel),
+                                            toolChoice: resolveToolChoiceForChannel(altChannel)
+                                        }
+                                        currentClient = await LlmService.createClient(altClientOptions)
+                                        // 切换渠道成功，重置新渠道的连续失败计数
+                                        channelFailStreak.delete(altChannel.id)
+                                        switched = true
+                                        continue
+                                    }
+                                }
+                            }
+
+                            // 无法切换Key或渠道，但有剩余请求预算时，原地重试（单渠道单Key场景）
                             retryCount++
                             totalRetryCount++
                             if (retryCount <= (isMainModel ? maxRetries : 1)) {
@@ -1465,7 +1655,16 @@ export class ChatService {
                                     reason: 'empty',
                                     attempt: retryCount
                                 })
-                                await new Promise(r => setTimeout(r, retryDelay * retryCount))
+                                const retryPolicy = pickChannelRetryPolicy(currentChannel, retryDelay, fallbackBackoff)
+                                const delay = computeDelay(retryCount, {
+                                    backoff: retryPolicy.backoff,
+                                    baseDelay: retryPolicy.delay,
+                                    maxDelay: 10000,
+                                    jitterRatio: retryJitter
+                                })
+                                logger.debug(`[ChatService] 空响应原地重试退避 ${delay}ms (${retryPolicy.backoff})`)
+                                switchChain[switchChain.length - 1].delay = delay
+                                await new Promise(r => setTimeout(r, delay))
                                 emptyRetryCount = 0 // 重置空响应计数，给重试一个机会
                                 continue
                             }
@@ -1475,46 +1674,17 @@ export class ChatService {
                         } catch (modelError) {
                             lastError = modelError
                             const errorMsg = modelError.message || ''
-
-                            // 分析错误类型
-                            let errorType = 'unknown'
-                            if (
-                                errorMsg.includes('401') ||
-                                errorMsg.includes('Unauthorized') ||
-                                errorMsg.includes('invalid_api_key')
-                            ) {
-                                errorType = 'auth'
-                            } else if (
-                                errorMsg.includes('429') ||
-                                errorMsg.includes('quota') ||
-                                errorMsg.includes('rate_limit')
-                            ) {
-                                errorType = 'quota'
-                            } else if (errorMsg.includes('timeout') || errorMsg.includes('ETIMEDOUT')) {
-                                errorType = 'timeout'
-                            } else if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('network')) {
-                                errorType = 'network'
-                            } else if (
-                                errorMsg.includes('500') ||
-                                errorMsg.includes('502') ||
-                                errorMsg.includes('503') ||
-                                errorMsg.includes('504') ||
-                                errorMsg.includes('Internal Server Error')
-                            ) {
-                                // 5xx/网关错误可重试：shouldTrySwitch 白名单含 'server'，
-                                // 但此前分类逻辑从不产出该类型，导致服务器错误退避/切换全部失效
-                                errorType = 'server'
-                            } else if (
-                                errorMsg.includes('400') ||
-                                errorMsg.includes('invalid_request') ||
-                                errorMsg.includes('invalid_parameter') ||
-                                errorMsg.includes('validation')
-                            ) {
-                                // 请求本身非法，切换渠道/重试无意义，标记为 client 避免无谓退避
-                                errorType = 'client'
-                            }
+                            // 分析错误类型（与 BackoffPolicy 统一口径；403 不归 auth，client/unknown 不触发切换）
+                            const errorType = classifyRetryError(modelError).type
 
                             logger.error(`[ChatService] 模型 ${currentModel} 请求失败 (${errorType}): ${errorMsg}`)
+                            // 请求抛错计入渠道连续失败（触发渠道级 retry.maxAttempts 强制切换）
+                            if (currentChannel) {
+                                channelFailStreak.set(
+                                    currentChannel.id,
+                                    (channelFailStreak.get(currentChannel.id) || 0) + 1
+                                )
+                            }
 
                             // 报告渠道错误
                             // 单次用户请求内，同一渠道只累加一次渠道级 errorCount，
@@ -1530,10 +1700,8 @@ export class ChatService {
                                 })
                             }
 
-                            // 判断是否应该尝试切换（认证、配额、超时、网络、服务器错误都应该尝试切换）
-                            const shouldTrySwitch = ['auth', 'quota', 'timeout', 'network', 'server'].includes(
-                                errorType
-                            )
+                            // 判断是否应该尝试切换（空/认证、配额、超时、网络、服务器错误都应该尝试切换）
+                            const shouldTrySwitch = expectRetryable(errorType)
                             let errorSwitched = false
 
                             // 尝试切换Key（认证错误优先切换Key）
@@ -1634,6 +1802,8 @@ export class ChatService {
                                     }
                                     currentClient = await LlmService.createClient(altClientOptions)
                                     errorSwitched = true
+                                    // 切换渠道成功，重置新渠道的连续失败计数
+                                    channelFailStreak.delete(altChannel.id)
                                     continue
                                 }
                             }
@@ -1652,16 +1822,23 @@ export class ChatService {
                             })
 
                             if (retryCount <= (isMainModel ? maxRetries : 1)) {
-                                // 指数退避延迟
-                                const delay = Math.min(retryDelay * Math.pow(2, retryCount - 1), 10000)
+                                // 渠道级 retry.delay/backoff 退避（ChannelManager 确保 retry 字段存在），带抖动
+                                const retryPolicy = pickChannelRetryPolicy(currentChannel, retryDelay, fallbackBackoff)
+                                const delay = computeDelay(retryCount, {
+                                    backoff: retryPolicy.backoff,
+                                    baseDelay: retryPolicy.delay,
+                                    maxDelay: 10000,
+                                    jitterRatio: retryJitter
+                                })
                                 logger.info(
-                                    `[ChatService] 无可切换选项，${delay}ms后重试 (${retryCount}/${maxRetries})`
+                                    `[ChatService] 无可切换选项，${delay}ms后重试 (${retryCount}/${maxRetries}, ${retryPolicy.backoff})`
                                 )
                                 switchChain.push({
                                     type: 'retry',
                                     channel: currentChannel?.name,
                                     reason: errorType,
-                                    attempt: retryCount
+                                    attempt: retryCount,
+                                    delay
                                 })
                                 await new Promise(r => setTimeout(r, delay))
                             }
@@ -1720,6 +1897,11 @@ export class ChatService {
                 finalResponse = response?.contents || []
                 finalUsage = response?.usage || {}
                 allToolLogs = response?.toolCallLogs || []
+                // 提示词缓存命中感知：根据上游 usage 判定命中断言并轮换缓存键
+                const cacheVerdict = PromptCacheService.noteUsage(usedChannel?.id, finalUsage)
+                if (cacheVerdict !== 'none' && cacheVerdict !== 'hit') {
+                    logger.debug(`[ChatService] 提示词缓存判定: ${cacheVerdict} (channel=${usedChannel?.id})`)
+                }
                 if (finalResponse.length > 0) {
                     const personalTagChanges = []
                     finalResponse = finalResponse

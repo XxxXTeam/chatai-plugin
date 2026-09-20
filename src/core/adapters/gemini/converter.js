@@ -34,6 +34,22 @@ function toGeminiImageInlineData(t) {
         }
         return { ok: false, fallback: '[不支持的图片已跳过]' }
     }
+    if (raw.startsWith('base64:')) {
+        // 兼容 NormalizeURL 层把外链改写成的 base64:<原文> 前缀：
+        // 剥头还原 data: 或 http(s)/file 原值后重新路由，绝不把 URL 当 base64 直发
+        const inner = raw.slice('base64:'.length)
+        if (inner.startsWith('data:')) return toGeminiImageInlineData({ ...t, image: inner })
+        if (/^https?:\/\//i.test(inner)) return { ok: false, fallback: '[图片]' }
+        if (inner.startsWith('file://') || inner.startsWith('/')) return { ok: false, fallback: '[图片]' }
+        return {
+            ok: true,
+            inlineData: { mimeType: t.mimeType || 'image/jpeg', data: inner }
+        }
+    }
+    if (/^https?:\/\//i.test(raw) || raw.startsWith('file://') || raw.startsWith('/')) {
+        // 裸 URL 到达转换器（transferMode url 之外的兜底路径）：不伪造 base64，降级占位
+        return { ok: false, fallback: '[图片]' }
+    }
     if (raw) {
         // 无 data 前缀的裸 base64：无法判定原始格式，按既有约定以 image/jpeg 发送
         return {

@@ -33,6 +33,20 @@ const PERSONA_DIR = path.join(DATA_DIR, 'persona')
 export const FALLBACK_SYSTEM_PROMPT = '你是一个有帮助的AI助手。'
 
 /**
+ * 格式化时间戳为分钟粒度的字符串，形如 `YYYY/MM/DD HH:mm。
+ * @param {Date} now - 目标时刻
+ * @returns {string} `YYYY/MM/DD HH:mm` 格式字符串
+ */
+export function formatMinuteTimestamp(now) {
+    const year = now.getFullYear()
+    const month = (now.getMonth() + 1).toString().padStart(2, '0')
+    const day = now.getDate().toString().padStart(2, '0')
+    const hours = now.getHours().toString().padStart(2, '0')
+    const minutes = now.getMinutes().toString().padStart(2, '0')
+    return `${year}/${month}/${day} ${hours}:${minutes}`
+}
+
+/**
  * 预设/人设配置结构
  * @typedef {Object} Preset
  * @property {string} id - 唯一标识
@@ -519,7 +533,10 @@ export class PresetManager {
      * - {{user_id}} 用户ID
      * - {{date}} 当前日期
      * - {{time}} 当前时间
-     * - {{datetime}} 日期时间
+     * - {{datetime}} 日期时间（含秒）
+     * - {{datetime_min}} 日期时间（分钟粒度，形如 2026/09/20 14:35；系统提示词推荐使用，
+     *   避免每秒变化破坏上游 prompt 缓存前缀；需要秒级请保持 {{datetime}} 或让模型调用 get_current_time 工具）
+     * - {{time_min}} 当前时间（分钟粒度，形如 14:35；语义同 {{datetime_min}}）
      * - {{weekday}} 星期几
      * - {{year}} / {{month}} / {{day}} 年/月/日
      * - {{bot_name}} Bot名称
@@ -543,6 +560,8 @@ export class PresetManager {
             date: now.toLocaleDateString('zh-CN'),
             time: now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
             datetime: now.toLocaleString('zh-CN'),
+            datetime_min: formatMinuteTimestamp(now),
+            time_min: formatMinuteTimestamp(now).slice(11),
             weekday: `星期${weekdays[now.getDay()]}`,
             year: now.getFullYear().toString(),
             month: (now.getMonth() + 1).toString(),

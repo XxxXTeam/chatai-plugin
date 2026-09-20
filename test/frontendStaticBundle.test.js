@@ -47,8 +47,8 @@ test('静态 memory 页面包含可写知识图谱工作台代码', () => {
     assert.match(source, /创建关系失败/)
 })
 
-test('静态 HTML 与 RSC 载荷禁止沿用旧缓存', () => {
+test('静态 HTML 与 RSC 载荷启用协商缓存而非沿用旧缓存', () => {
     const source = fs.readFileSync(path.resolve('src/services/webServer.js'), 'utf8')
     assert.match(source, /extension === '\.html' \|\| extension === '\.txt'/)
-    assert.match(source, /res\.setHeader\('Cache-Control', 'no-store'\)/)
+    assert.match(source, /res\.setHeader\('Cache-Control', 'no-cache'\)/)
 })

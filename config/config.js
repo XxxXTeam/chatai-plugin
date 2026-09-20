@@ -181,7 +181,10 @@ class Config {
                     enabled: true, // 启用备选模型轮询
                     models: [], // 备选模型列表，按优先级排序
                     maxRetries: 3, // 最大重试次数
-                    retryDelay: 500, // 重试间隔(ms)
+                    retryDelay: 500, // 重试间隔(ms)，渠道未配置 retry.delay 时的兜底值
+                    emptyRetries: 2, // 空响应重试次数（0 表示禁用空重试）
+                    retryJitter: 0.3, // 重试抖动比例（0~0.8，0 表示无抖动）
+                    backoff: 'exponential', // 兜底退避策略：'fixed' | 'linear' | 'exponential'（渠道 retry.backoff 缺失时使用）
                     notifyOnFallback: false // 切换模型时是否通知用户
                 },
                 /*
@@ -462,9 +465,9 @@ class Config {
              *     connect: number,              // 连接超时（毫秒）
              *     read: number                  // 读取超时（毫秒）
              *   },
-             *   retry: {                        // 重试配置
-             *     maxAttempts: number,          // 最大重试次数
-             *     delay: number,                // 重试延迟（毫秒）
+             *   retry: {                        // 重试配置（已被 ChatService 消费，驱动同渠道重试）
+             *     maxAttempts: number,          // 同渠道连续失败多少次后强制切换渠道（含空响应）
+             *     delay: number,                // 同渠道重试间隔（毫秒），也作为退避基数 baseDelay
              *     backoff: string               // 退避策略: 'exponential' | 'linear' | 'fixed'
              *   },
              *   quota: {                        // 配额配置

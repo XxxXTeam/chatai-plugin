@@ -145,6 +145,7 @@ import {
     ChaiteResponse
 } from './routes/index.js'
 import { errorHandler } from './middleware/ApiResponse.js'
+import { createApiEtagCacheMiddleware } from './middleware/apiEtagCache.js'
 import { nlSchedulerService } from './scheduler/NLSchedulerService.js'
 import { groupSummaryPushService } from './group/GroupSummaryPushService.js'
 
@@ -481,8 +482,15 @@ class WebServer {
                 express.static(webDir, {
                     setHeaders: (res, filePath) => {
                         const extension = path.extname(filePath).toLowerCase()
+                        const relativePath = path.relative(webDir, filePath).split(path.sep).join('/')
                         if (extension === '.html' || extension === '.txt') {
-                            res.setHeader('Cache-Control', 'no-store')
+                            res.setHeader('Cache-Control', 'no-cache')
+                        } else if (relativePath === 'sw.js') {
+                            res.setHeader('Cache-Control', 'no-cache')
+                        } else if (relativePath.startsWith('_next/static/')) {
+                            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+                        } else if (extension === '.ico' || extension === '.png' || extension === '.svg') {
+                            res.setHeader('Cache-Control', 'public, max-age=86400')
                         }
                     }
                 })
@@ -537,6 +545,9 @@ class WebServer {
     setupRoutes() {
         const auth = this.authMiddleware.bind(this)
         const mountPath = this.mountPath
+
+        // API ETag 协商缓存：置于 router 最前，GET 请求按会话身份（req.user.jti）分桶
+        this.router.use(createApiEtagCacheMiddleware())
 
         this.router.get('/login/token', async (req, res) => {
             const { token } = req.query

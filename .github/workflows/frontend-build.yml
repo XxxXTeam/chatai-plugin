@@ -36,10 +36,8 @@ jobs:
           else
             npm install
           fi
-
-      ## 构建前端静态导出
       - name: Build frontend
-        run: npx next build
+        run: npm run export -- --copy-only
 
       ## 验证构建产物
       - name: Verify build output
@@ -50,6 +48,10 @@ jobs:
           fi
           echo "Build output size: $(du -sh out | cut -f1)"
           echo "File count: $(find out -type f | wc -l)"
+          if [ ! -f "out/sw.js" ]; then
+            echo "::error::Service Worker out/sw.js missing"
+            exit 1
+          fi
 
       ## 获取触发提交的信息用于 commit 消息
       - name: Get commit info

@@ -1,46 +1,10 @@
-/**
- * LlmDelegate - 旁路 LLM 调用统一助手
- *
- * 记忆、知识图谱、总结等子模块绕过 ChatService 直接调用适配器时，
- * 过去既未遵循渠道 advanced.streaming 配置，失败时也不做渠道切换与重试。
- * 本模块为这些旁路调用提供与 ChatService 主路径一致的契约：
- *
- * 1. 渠道选择：优先指定模型可用渠道，回退启用的通用渠道；
- * 2. 流式遵循：请求参数统一携带渠道 advanced.streaming.enabled；
- * 3. 失败重试：错误上报渠道冷却、切换同模型其他渠道、指数退避重试，
- *    全部失败后才抛出错误，由调用方按既有语义降级（返回空/回退策略）。
- *
- * 纯函数式组合，无单例状态；渠道元信息随调用返回，供调用方回填统计。
- */
-
 import { chatLogger } from '../../core/utils/logger.js'
 import { LlmService } from './LlmService.js'
 import { channelManager } from './ChannelManager.js'
+import { classifyRetryError, computeDelay } from './BackoffPolicy.js'
 import config from '../../../config/config.js'
 
 const logger = chatLogger
-
-/** 渠道切换后冷却保护：同一次调用中不重复尝试的渠道 ID */
-const RETRYABLE_ERROR_SAMPLES = {
-    auth: ['401', 'Unauthorized', 'invalid_api_key'],
-    quota: ['429', 'quota', 'rate_limit'],
-    timeout: ['timeout', 'ETIMEDOUT'],
-    network: ['ECONNREFUSED', 'network'],
-    server: ['500', '503', '502']
-}
-
-/**
- * 按消息文本分析错误类别（与 ChatService._sendMessageImpl 保持同一分类口径）
- * @param {string|Error} error - 错误对象或消息
- * @returns {string} 错误类别
- */
-function classifyDelegateError(error) {
-    const message = typeof error === 'string' ? error : error?.message || ''
-    for (const [type, samples] of Object.entries(RETRYABLE_ERROR_SAMPLES)) {
-        if (samples.some(sample => message.includes(sample))) return type
-    }
-    return 'unknown'
-}
 
 /**
  * 延迟等待（毫秒）
@@ -52,15 +16,17 @@ function sleep(ms) {
 }
 
 /**
- * 读几何配置：重试次数、退避基础延迟、是否允许渠道切换。
- * 默认与 ChatService 的 llm.fallback 保持一致（maxRetries 3 / retryDelay 500）。
- * @returns {{maxRetries: number, retryDelay: number, enableChannelSwitch: boolean}}
+ * 读几何配置：重试次数、退避基础延迟、退避策略、抖动、是否允许渠道切换。
+ * 默认与 ChatService 的 llm.fallback 保持一致（maxRetries 3 / retryDelay 500 / backoff exponential / retryJitter 0.3）。
+ * @returns {{maxRetries: number, retryDelay: number, backoff: string, retryJitter: number, enableChannelSwitch: boolean}}
  */
 export function getDelegateFallbackConfig() {
     const fallback = configGetFallback()
     return {
         maxRetries: Math.max(1, fallback.maxRetries || 3),
         retryDelay: Math.max(50, fallback.retryDelay || 500),
+        backoff: fallback.backoff || 'exponential',
+        retryJitter: Math.max(0, Math.min(0.8, Number(fallback.retryJitter ?? 0.3))),
         enableChannelSwitch: fallback.enableChannelSwitch !== false
     }
 }
@@ -188,6 +154,56 @@ export function resolveChannelStream(channel, explicitStream) {
 }
 
 /**
+ * 上报旁路调用失败并等待退避延迟（空返回与请求异常共用同一失败处理路径）
+ * @param {Object} channel - 失败渠道对象
+ * @param {number} keyIndex - 当前 Key 索引
+ * @param {Error} error - 失败错误（空返回时为合成错误）
+ * @param {string} errorType - 错误类别（空返回传 'empty'）
+ * @param {number} attempt - 当前尝试序号（从 0 开始）
+ * @param {string} caller - 调用者标签
+ * @param {boolean} enableChannelSwitch - 是否允许渠道切换
+ * @param {number} max - 重试上限
+ * @param {Object} backoffOptions - 退避选项 { backoff, retryDelay, retryJitter }
+ * @returns {Promise<void>}
+ */
+async function reportDelegateFailure(
+    channel,
+    keyIndex,
+    error,
+    errorType,
+    attempt,
+    caller,
+    enableChannelSwitch,
+    max,
+    backoffOptions
+) {
+    logger.error(`[LlmDelegate] ${caller} 渠道 ${channel.name} 请求失败 (${errorType}): ${error.message}`)
+    try {
+        await channelManager.reportError(channel.id, {
+            keyIndex,
+            errorType,
+            errorMessage: error.message,
+            isRetry: attempt > 0
+        })
+    } catch (reportError) {
+        logger.debug('[LlmDelegate] 上报渠道错误失败:', reportError.message)
+    }
+    if (!enableChannelSwitch) {
+        return
+    }
+    if (attempt < max) {
+        const delay = computeDelay(attempt + 1, {
+            backoff: backoffOptions.backoff,
+            baseDelay: backoffOptions.retryDelay,
+            maxDelay: 10000,
+            jitterRatio: backoffOptions.retryJitter
+        })
+        logger.debug(`[LlmDelegate] ${caller} ${delay}ms 后重试 (${attempt + 1}/${max})`)
+        await sleep(delay)
+    }
+}
+
+/**
  * 旁路 LLM 调用（带渠道流式遵循 + 渠道切换重试）
  * @param {Object} message - 用户消息 { role, content }（内部格式）
  * @param {Object} [options] - 调用选项
@@ -204,7 +220,7 @@ export function resolveChannelStream(channel, explicitStream) {
  */
 export async function callWithChannelDelegate(message, options = {}) {
     const caller = options.caller || 'LlmDelegate'
-    const { maxRetries, retryDelay, enableChannelSwitch } = getDelegateFallbackConfig()
+    const { maxRetries, retryDelay, backoff, retryJitter, enableChannelSwitch } = getDelegateFallbackConfig()
     const max = options.maxRetries ?? maxRetries
 
     const { channels, preferChannel } = await resolveDelegateCandidates(options.model, options.groupId)
@@ -241,35 +257,48 @@ export async function callWithChannelDelegate(message, options = {}) {
             }
             logger.debug(`[LlmDelegate] ${caller} 调用: channel=${pick.name} model=${actualModel} stream=${useStream}`)
             const response = await client.sendMessage(message, requestOptions)
-            return {
-                response,
-                model: actualModel,
-                channel: pick,
-                stream: useStream,
-                tries: attempt + 1
+            const usableContents = response?.contents?.filter(c => c.type === 'text' && c.text?.trim()).length > 0
+            const hasToolCalls = response?.toolCallLogs?.length > 0
+            if (hasToolCalls || usableContents) {
+                return {
+                    response,
+                    model: actualModel,
+                    channel: pick,
+                    stream: useStream,
+                    tries: attempt + 1
+                }
+            }
+
+            // 空返回视为可重试失败：继续尝试下一候选渠道，耗尽后抛出
+            lastError = new Error(`渠道 ${pick.name} 返回空响应`)
+            logger.warn(`[LlmDelegate] ${caller} 渠道 ${pick.name} 返回空响应，尝试下一渠道`)
+            await reportDelegateFailure(pick, keyIndex, lastError, 'empty', attempt, caller, enableChannelSwitch, max, {
+                backoff,
+                retryDelay,
+                retryJitter
+            })
+            if (!enableChannelSwitch || attempt >= max) {
+                break
             }
         } catch (error) {
             lastError = error
-            const errorType = classifyDelegateError(error)
-            logger.error(`[LlmDelegate] ${caller} 渠道 ${pick.name} 请求失败 (${errorType}): ${error.message}`)
-            try {
-                await channelManager.reportError(pick.id, {
-                    keyIndex,
-                    errorType,
-                    errorMessage: error.message,
-                    isRetry: attempt > 0
-                })
-            } catch (reportError) {
-                logger.debug('[LlmDelegate] 上报渠道错误失败:', reportError.message)
-            }
-            // 渠道切换开关关闭时不再尝试其他渠道，直接退出重试
-            if (!enableChannelSwitch) {
+            await reportDelegateFailure(
+                pick,
+                keyIndex,
+                error,
+                classifyRetryError(error).type,
+                attempt,
+                caller,
+                enableChannelSwitch,
+                max,
+                {
+                    backoff,
+                    retryDelay,
+                    retryJitter
+                }
+            )
+            if (!enableChannelSwitch || attempt >= max) {
                 break
-            }
-            if (attempt < max) {
-                const delay = Math.min(retryDelay * Math.pow(2, attempt), 10000)
-                logger.debug(`[LlmDelegate] ${caller} ${delay}ms 后重试 (${attempt + 1}/${max})`)
-                await sleep(delay)
             }
         }
     }
