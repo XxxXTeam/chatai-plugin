@@ -134,3 +134,13 @@ export function noteUsage(channelId, usage) {
     }
     return 'none'
 }
+
+/**
+ * @type {Object}
+ */
+export const PromptCacheService = {
+    buildPromptCacheKey,
+    getPromptCacheKey,
+    clearChannel,
+    noteUsage
+}
