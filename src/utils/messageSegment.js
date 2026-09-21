@@ -352,6 +352,25 @@ export function calculateDelay(text, options = {}) {
 }
 
 /**
+ * @param {string[]} segments - 分段结果
+ * @returns {string[]} 剥离编号后的分段
+ */
+export function stripListNumbering(segments) {
+    if (!Array.isArray(segments) || segments.length < 2) return segments
+    const consumed = []
+    let lastNumber = -1
+    for (let i = 0; i < segments.length; i++) {
+        const match = segments[i].match(/^\s*(\d+)\s*[.、)]\s*/)
+        if (!match) return segments
+        const number = Number(match[1])
+        if (i > 0 && number !== lastNumber + 1) return segments
+        lastNumber = number
+        consumed.push(match[0].length)
+    }
+    return segments.map((segment, index) => segment.slice(consumed[index]))
+}
+
+/**
  * @param {Object} e - Yunzai 事件对象（需含 reply 方法）
  * @param {string} text - 待发送文本
  * @param {Object} options - 发送选项
@@ -415,21 +434,22 @@ export async function sendSegmentedMessage(e, text, options = {}) {
             folded: false
         }
     }
+    const polishedSegments = stripListNumbering(segments)
 
     const messageIds = []
     let lastMessageId = null
-    for (let i = 0; i < segments.length; i++) {
-        const result = await e.reply(segments[i], quote && i === 0, replyOptions)
+    for (let i = 0; i < polishedSegments.length; i++) {
+        const result = await e.reply(polishedSegments[i], quote && i === 0, replyOptions)
         const messageId = result?.message_id
         if (messageId) {
             messageIds.push(messageId)
             lastMessageId = messageId
         }
         if (onSegmentSent) {
-            onSegmentSent(i, segments.length, messageId)
+            onSegmentSent(i, polishedSegments.length, messageId)
         }
-        if (i < segments.length - 1) {
-            const delay = calculateDelay(segments[i])
+        if (i < polishedSegments.length - 1) {
+            const delay = calculateDelay(polishedSegments[i])
             await new Promise(r => setTimeout(r, delay))
         }
     }
@@ -440,5 +460,6 @@ export default {
     splitMessage,
     splitIntoSentences,
     calculateDelay,
+    stripListNumbering,
     sendSegmentedMessage
 }
