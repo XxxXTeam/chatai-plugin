@@ -376,7 +376,12 @@ export class LlmService {
             maxCharacters: channel.advanced?.llm?.maxCharacters || 0,
             /* 暴露温度覆盖配置，供绕过 ChatService 的调用方（Galgame/bym 等）解析温度 */
             llm: channel.advanced?.llm || {},
-            overrides: channel.overrides || {}
+            overrides: channel.overrides || {},
+            /*
+             * 供旁路模块（记忆/图谱/压缩等）通过委托精确定位渠道：
+             * channel 已完成 normalizeAdvanced，流式开关与主对话同源。
+             */
+            channel
         }
 
         return client

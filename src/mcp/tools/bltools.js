@@ -148,6 +148,11 @@ export const bltoolsTools = [
 
                 const audioUrl = `http://c6.y.qq.com/rsc/fcgi-bin/fcg_pyq_play.fcg?songmid=${mid}&songtype=1&fromtag=50&code=${code}`
 
+                /*
+                 * 歌手信息必须放 OneBot 标准的 content 字段：
+                 * NapCat 会把它改写为签名协议的 singer，LLOneBot 的
+                 * 类型定义也只接受 content。直接传 singer 在两侧都会被丢。
+                 */
                 const musicMsg = {
                     type: 'music',
                     data: {
@@ -155,8 +160,8 @@ export const bltoolsTools = [
                         url: `https://y.qq.com/n/yqq/song/${mid}.html`,
                         audio: audioUrl,
                         title: name,
-                        image: pic,
-                        singer: artist
+                        ...(pic ? { image: pic } : {}),
+                        ...(artist && artist !== '未知' ? { content: artist } : {})
                     }
                 }
 

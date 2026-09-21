@@ -8,6 +8,11 @@ import { statsService } from '../src/services/stats/StatsService.js'
 import { StandardBotApi } from '../src/core/platform/index.js'
 import { emojiThiefService } from './EmojiThief.js'
 import { getRecentQQBotMessages } from '../src/services/storage/MessageCache.js'
+import {
+    splitMessage as splitMessageNatural,
+    splitIntoSentences as splitIntoSentencesNatural,
+    sendSegmentedMessage
+} from '../src/utils/messageSegment.js'
 
 async function getBymGroupContextMessages(e, groupId, limit = 15) {
     const api = StandardBotApi.fromContext({ event: e, bot: e?.bot || globalThis.Bot })
@@ -566,29 +571,8 @@ ${contextText}
 
                 let handled = false
 
-                // 按句输出模式
-                if (sentenceOutputCfg.enabled) {
-                    const sentences = this.splitIntoSentences(replyText)
-                    if (sentences.length > 1) {
-                        for (let i = 0; i < sentences.length; i++) {
-                            await this.reply(sentences[i], false, { recallMsg: recallDelay })
-                            if (i < sentences.length - 1) {
-                                const delay =
-                                    sentenceOutputCfg.randomDelay !== false
-                                        ? (sentenceOutputCfg.minDelay || 300) +
-                                          Math.random() *
-                                              ((sentenceOutputCfg.maxDelay || 1500) -
-                                                  (sentenceOutputCfg.minDelay || 300))
-                                        : sentenceOutputCfg.minDelay || 300
-                                await new Promise(r => setTimeout(r, delay))
-                            }
-                        }
-                        handled = true
-                    }
-                }
-
-                // 数学公式渲染
-                if (!handled && mathRenderEnabled) {
+                // 数学公式渲染优先：伪人回复含公式时渲染为图片
+                if (mathRenderEnabled) {
                     const mathDetection = renderService.detectMathFormulas(replyText)
                     if (mathDetection.hasMath && mathDetection.confidence !== 'low') {
                         try {
@@ -602,29 +586,60 @@ ${contextText}
                     }
                 }
 
-                // 长文本合并转发
-                if (!handled && longTextCfg.enabled !== false && replyText.length > (longTextCfg.threshold || 500)) {
-                    const mode = longTextCfg.mode || 'forward'
-                    if (mode === 'image') {
-                        try {
-                            const { renderService } = await import('../src/services/media/RenderService.js')
-                            const imageBuffer = await renderService.renderMarkdownToImage({
-                                markdown: replyText,
-                                title: 'AI 回复',
-                                icon: '💬',
-                                theme: config.get('render.theme') || 'light',
-                                width: config.get('render.width') || 800
-                            })
-                            await e.reply(segment.image(imageBuffer), true)
+                // 统一拟人发送：短回复单条；中等长度按语义分段逐条；超长折叠为卡片
+                if (!handled) {
+                    const enableSegmented = sentenceOutputCfg.enabled
+                    const foldLimit = Math.max(longTextCfg.threshold || 500, 500)
+                    if (enableSegmented || replyText.length > 140) {
+                        const result = await sendSegmentedMessage(this, replyText, {
+                            quote: false,
+                            shortLimit: 140,
+                            foldLimit,
+                            foldHandler: async fullText => {
+                                if (longTextCfg.enabled === false) return false
+                                const mode = longTextCfg.mode || 'forward'
+                                if (mode === 'image') {
+                                    try {
+                                        const { renderService } = await import('../src/services/media/RenderService.js')
+                                        const imageBuffer = await renderService.renderMarkdownToImage({
+                                            markdown: fullText,
+                                            title: 'AI 回复',
+                                            icon: '💬',
+                                            theme: config.get('render.theme') || 'light',
+                                            width: config.get('render.width') || 800
+                                        })
+                                        await this.reply(segment.image(imageBuffer), false, { recallMsg: recallDelay })
+                                        return true
+                                    } catch {
+                                        return false
+                                    }
+                                }
+                                if (mode === 'forward' || mode === 'auto') {
+                                    try {
+                                        // 转发卡片内的段落按语义切片，替换原先只按空行拆分的硬规则
+                                        const paragraphs = splitMessageNatural(fullText, {
+                                            chunkSize: 300,
+                                            maxChunk: 500,
+                                            mergeThreshold: 24
+                                        })
+                                        if (paragraphs.length > 0) {
+                                            return await sendForwardMsg(
+                                                e,
+                                                longTextCfg.forwardTitle || 'AI 回复',
+                                                paragraphs
+                                            )
+                                        }
+                                    } catch {
+                                        /* 转发失败回退逐条 */
+                                    }
+                                }
+                                return false
+                            },
+                            replyOptions: { recallMsg: recallDelay }
+                        })
+                        if (result.folded || result.messageIds.length > 0) {
                             handled = true
-                        } catch {}
-                    } else if (mode === 'forward' || mode === 'auto') {
-                        try {
-                            const paragraphs = replyText.split(/\n{2,}/).filter(p => p.trim())
-                            if (paragraphs.length > 0) {
-                                handled = await sendForwardMsg(e, longTextCfg.forwardTitle || 'AI 回复', paragraphs)
-                            }
-                        } catch {}
+                        }
                     }
                 }
 
@@ -653,32 +668,11 @@ ${contextText}
     }
 
     /**
-     * 将文本分割为句子
+     * 兼容入口：统一走 messageSegment 的语义分段实现。
+     * @param {string} text - 待拆分文本
+     * @returns {string[]} 句子数组
      */
     splitIntoSentences(text) {
-        if (!text) return []
-        const lines = text.split(/\n+/)
-        const sentences = []
-        for (const line of lines) {
-            if (!line.trim()) continue
-            const parts = line.split(/(?<=[。！？!?.…])\s*/)
-            for (const part of parts) {
-                const trimmed = part.trim()
-                if (trimmed) sentences.push(trimmed)
-            }
-        }
-        // 合并过短的句子
-        const merged = []
-        let buffer = ''
-        for (const s of sentences) {
-            if (buffer.length + s.length < 20 && buffer) {
-                buffer += s
-            } else {
-                if (buffer) merged.push(buffer)
-                buffer = s
-            }
-        }
-        if (buffer) merged.push(buffer)
-        return merged.length > 0 ? merged : [text]
+        return splitIntoSentencesNatural(text)
     }
 }

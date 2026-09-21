@@ -82,6 +82,7 @@ export async function extractMemoryLLMText(response) {
  * @param {number} [options.maxTokens=1000] - 最大 token 数
  * @param {number} [options.temperature=0.3] - 温度参数
  * @param {string} [options.caller='MemoryLLM'] - 调用者标识（用于日志）
+ * @param {string} [options.groupId] - 群组 ID（用于群独立渠道选择）
  * @returns {Promise<string>} LLM 响应文本
  */
 export async function callMemoryLLM(llmClient, prompt, options = {}) {
@@ -110,7 +111,17 @@ export async function callMemoryLLM(llmClient, prompt, options = {}) {
                 ...(model ? { model } : {}),
                 maxToken: maxTokens,
                 ...tempOpts,
-                caller
+                caller,
+                /*
+                 * 渠道与作用域显式透传：
+                 * - channelId 优先复用调用方 getChatClient 已选定的渠道，
+                 *   保证流式开关与主对话同源；
+                 * - groupId 在未指定渠道时让委托优先解析群独立渠道。
+                 */
+                ...(llmClient._channelInfo?.id ? { channelId: String(llmClient._channelInfo.id) } : {}),
+                ...(options.groupId !== undefined && options.groupId !== null && options.groupId !== ''
+                    ? { groupId: String(options.groupId) }
+                    : {})
             }
         )
         logger.debug(`[${caller}] LlmDelegate 调用完成: streams=${delegated.stream}, tries=${delegated.tries}`)

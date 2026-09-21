@@ -35,6 +35,7 @@ import { applySkillToolConstraints, getSkillToolConstraints } from '../skills/Sk
 import { resolveToolPermission } from '../tools/ToolPermission.js'
 import { normalizeInlineImageContent } from './InlineImageDataUrl.js'
 import { PromptCacheService } from './PromptCacheService.js'
+import { sendSegmentedMessage } from '../../utils/messageSegment.js'
 
 let scopeManager = null
 const ensureScopeManager = async () => {
@@ -1087,14 +1088,33 @@ export class ChatService {
             }
 
             if (event && event.reply) {
+                // 中间文本去重缓存：多轮工具调用中 AbstractClient 每轮回调
+                // 携带的是当前轮模型的全文文本（非增量），直接逐条发送会重复发
+                // 出已发出的前缀段落，形成一句一句的碎片刷屏
+                let intermediateSent = ''
                 client.setOnMessageWithToolCall(async data => {
                     if (data?.intermediateText && data.isIntermediate) {
                         const text = data.intermediateText.trim()
-                        if (text) {
-                            if (this.isPureToolCallJson(text)) {
-                                return
-                            }
-                            await event.reply(text, true)
+                        if (!text) return
+                        if (this.isPureToolCallJson(text)) {
+                            return
+                        }
+                        // 增量去重：新文本以已发送内容为前缀时只发新增部分
+                        let pending = text
+                        if (intermediateSent && text.startsWith(intermediateSent)) {
+                            pending = text.slice(intermediateSent.length).trim()
+                        }
+                        intermediateSent = text
+                        if (!pending) return
+                        // 中间插话统一走语义分段发送，符合真人逐段节发习惯
+                        try {
+                            await sendSegmentedMessage(event, pending, {
+                                quote: true,
+                                shortLimit: 100,
+                                foldLimit: 800
+                            })
+                        } catch (err) {
+                            logger.debug('[ChatService] 中间消息分段发送失败:', err.message)
                         }
                     } else if (data?.type === 'text' && data.text) {
                         await event.reply(data.text, true)

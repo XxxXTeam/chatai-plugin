@@ -1069,7 +1069,16 @@ ${existingMemoryList || '暂无'}
             typeof client?.sendMessageWithHistory === 'function' && typeof client?._channelInfo?.id === 'string'
         if (isInternalClient) {
             const { callWithChannelDelegate } = await import('../llm/LlmDelegate.js')
-            const delegated = await callWithChannelDelegate(message, { ...requestOptions, caller })
+            const delegated = await callWithChannelDelegate(message, {
+                ...requestOptions,
+                /*
+                 * 渠道显式复用：getChatClient 已为我们选定渠道，
+                 * 让委托优先走同一渠道，流式开关与主对话同源，
+                 * 而不是重新猜渠道（猜测失败会落到全局首个渠道 → 非流）。
+                 */
+                ...(client._channelInfo?.id ? { channelId: String(client._channelInfo.id) } : {}),
+                caller
+            })
             return delegated.response
         }
         return await client.sendMessage(message, requestOptions)

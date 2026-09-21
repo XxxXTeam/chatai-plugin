@@ -197,9 +197,20 @@ export function normalizeStandardSegment(segment) {
     if (segment.type === 'raw' || segment.type === 'markdown' || segment.type === 'button') return { ...segment }
     const wrapped = segment.data
     if (wrapped && typeof wrapped === 'object' && !Array.isArray(wrapped)) {
-        const direct = { ...segment }
+        // music/poke 的 data 里携带平台子类型（qq/163/xm/custom），与外层 type 同名。
+        // 展开时保留为 music_type/poke_type，否则平台类型丢失，协议端无法识别卡片。
+        const subTypeKey = segment.type === 'music' ? 'music_type' : segment.type === 'poke' ? 'poke_type' : null
+        const direct = { ...segment, ...wrapped, type: segment.type }
         delete direct.data
-        return { ...direct, ...wrapped, type: segment.type }
+        if (
+            subTypeKey &&
+            typeof wrapped.type === 'string' &&
+            wrapped.type !== segment.type &&
+            direct[subTypeKey] === undefined
+        ) {
+            direct[subTypeKey] = wrapped.type
+        }
+        return direct
     }
     return { ...segment }
 }
@@ -267,7 +278,9 @@ export function serializeOneBotSegment(segment) {
         delete data.type
         const musicType = data.music_type
         delete data.music_type
-        return { type: 'music', data: withoutUndefined({ type: musicType, ...data }) }
+        const customFields = withoutUndefined({ type: musicType, ...data })
+        // NapCat 等 b 端对 music 段额外字段的容忍度参差：传递经逐键校验的紧凑结构
+        return { type: 'music', data: customFields }
     }
     if (normalized.type === 'poke') {
         const data = { ...normalized }

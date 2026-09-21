@@ -23,6 +23,7 @@ import { resolveTemperature, resolveClientTemperature } from '../llm/Temperature
 import { attachToolMetadata } from '../../core/adapters/tooling.js'
 import { applySkillToolConstraints, getSkillToolConstraints } from '../skills/SkillToolConstraints.js'
 import { resolveToolPermission } from '../tools/ToolPermission.js'
+import { sendSegmentedMessage } from '../../utils/messageSegment.js'
 /**
  * 工具使用原则。
  * 无论是否能从 skills.yaml 读到分组，这套判断标准都相同，
@@ -587,7 +588,12 @@ export class ChatAgent {
                           const text = (data.intermediateText || '').trim()
                           if (!text) return
                           try {
-                              await event.reply(text, true)
+                              // 中间插话统一走语义分段发送，避免模型残留段被打成一句一句
+                              await sendSegmentedMessage(event, text, {
+                                  quote: true,
+                                  shortLimit: 100,
+                                  foldLimit: 800
+                              })
                           } catch (err) {
                               logger.debug('[ChatAgent] 中间消息回复失败:', err.message)
                           }

@@ -27,6 +27,7 @@ const toolModules = {
     shell: { file: './shell.js', export: 'shellTools' },
     schedule: { file: './nlSchedule.js', export: 'nlScheduleTools' },
     bltools: { file: './bltools.js', export: 'bltoolsTools' },
+    yunzaiCommand: { file: './yunzaiCommand.js', export: 'yunzaiCommandTools' },
     reminder: { file: './reminder.js', export: 'reminderTools' },
     imageGen: { file: './imageGen.js', export: 'imageGenTools' },
     qzone: { file: './qzone.js', export: 'qzoneTools' },
@@ -109,6 +110,11 @@ const categoryMeta = {
         description:
             'QQ音乐、表情包搜索、Bing图片、壁纸、B站视频搜索/总结、GitHub、AI图片编辑、视频分析、思维导图。用户要听歌、找图、看视频时调用',
         icon: 'Sparkles'
+    },
+    yunzaiCommand: {
+        name: 'Yunzai 命令执行',
+        description: '按当前触发者权限搜索并执行 Yunzai 已加载的插件命令。用户要求执行其它插件的机器人命令时调用',
+        icon: 'Command'
     },
     reminder: {
         name: '定时提醒',

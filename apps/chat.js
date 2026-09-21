@@ -20,6 +20,11 @@ import { statsService } from '../src/services/stats/StatsService.js'
 import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
 import { checkTriggerAccess, sendForwardMsg as platformSendForwardMsg } from '../src/utils/platformAdapter.js'
 import { mcpManager } from '../src/mcp/McpManager.js'
+import {
+    splitMessage as splitMessageNatural,
+    splitIntoSentences as splitIntoSentencesNatural,
+    sendSegmentedMessage
+} from '../src/utils/messageSegment.js'
 import { setToolContext } from '../src/core/utils/toolAdapter.js'
 import { conversationTracker } from '../src/services/llm/ConversationTracker.js'
 import { contextManager } from '../src/services/llm/ContextManager.js'
@@ -686,41 +691,7 @@ export class Chat extends plugin {
                         }
                     }
 
-                    // 长文本合并转发处理
-                    if (
-                        !handled &&
-                        longTextCfg.enabled !== false &&
-                        replyTextContent.length > (longTextCfg.threshold || 500)
-                    ) {
-                        const mode = longTextCfg.mode || 'forward'
-                        if (mode === 'image') {
-                            try {
-                                const { renderService } = await import('../src/services/media/RenderService.js')
-                                const imageBuffer = await renderService.renderMarkdownToImage({
-                                    markdown: replyTextContent,
-                                    title: 'AI 回复',
-                                    icon: '💬',
-                                    theme: config.get('render.theme') || 'light',
-                                    width: config.get('render.width') || 800
-                                })
-                                const replyResult = await this.reply(segment.image(imageBuffer), quoteReply)
-                                this.handleAutoRecall(replyResult, false)
-                                handled = true
-                            } catch {
-                                // 渲染失败，回退到普通发送
-                            }
-                        } else if (mode === 'forward' || mode === 'auto') {
-                            try {
-                                const paragraphs = replyTextContent.split(/\n{2,}/).filter(p => p.trim())
-                                if (paragraphs.length > 0) {
-                                    await this.sendForwardMsg(longTextCfg.forwardTitle || 'AI 回复', paragraphs)
-                                    handled = true
-                                }
-                            } catch {
-                                // 合并转发失败，回退到普通发送
-                            }
-                        }
-                    }
+                    // 文本统一发送：短回复单条、中等长度按语义分段逐条、超长折叠
                     if (!handled && replyTextContent) {
                         const toolWrapperFiltered = this.formatReplyTextOnly(result.response)
                         const toolWrapperNoise =
@@ -728,29 +699,75 @@ export class Chat extends plugin {
                             (this.isLikelyToolWrapperText(toolWrapperFiltered) ||
                                 this.hasToolLikeSegment(toolWrapperFiltered))
                         const sentenceOutputCfg = config.get('output.sentenceOutput') || {}
-                        if (sentenceOutputCfg.enabled && sentenceOutputCfg.chatEnabled !== false && !toolWrapperNoise) {
-                            const sentences = this.splitIntoSentences(replyTextContent)
-                            if (sentences.length > 1) {
-                                for (let i = 0; i < sentences.length; i++) {
-                                    const replyResult = await this.reply(sentences[i], i === 0 ? quoteReply : false)
-                                    if (i === 0) this.handleAutoRecall(replyResult, false)
-                                    if (i < sentences.length - 1) {
-                                        const delay =
-                                            sentenceOutputCfg.randomDelay !== false
-                                                ? (sentenceOutputCfg.minDelay || 500) +
-                                                  Math.random() *
-                                                      ((sentenceOutputCfg.maxDelay || 2000) -
-                                                          (sentenceOutputCfg.minDelay || 500))
-                                                : sentenceOutputCfg.minDelay || 500
-                                        await new Promise(r => setTimeout(r, delay))
+                        // 单条可直发的文本长度上限：超过即进入语义分段/折叠流程
+                        const DIRECT_SEND_LIMIT = 140
+                        const useSegmentedOutput = sentenceOutputCfg.enabled && sentenceOutputCfg.chatEnabled !== false
+                        // 超长折叠阈值：超过则将整段回复折叠为合并转发/图片卡片
+                        const foldLimit = Math.max(longTextCfg.threshold || 500, 500)
+                        // 短回复临界值：可逐句发送的最大长度
+                        const shortLimit = Math.max(DIRECT_SEND_LIMIT, foldLimit)
+
+                        // 优先走统一分段发送（启用按句输出时对所有文本生效，否则仅长文本前置）
+                        if (!toolWrapperNoise && (useSegmentedOutput || replyTextContent.length > DIRECT_SEND_LIMIT)) {
+                            const sent = await sendSegmentedMessage(this, replyTextContent, {
+                                quote: quoteReply,
+                                shortLimit,
+                                foldLimit,
+                                foldHandler: async fullText => {
+                                    if (longTextCfg.enabled === false) return false
+                                    const mode = longTextCfg.mode || 'forward'
+                                    if (mode === 'image') {
+                                        try {
+                                            const { renderService } =
+                                                await import('../src/services/media/RenderService.js')
+                                            const imageBuffer = await renderService.renderMarkdownToImage({
+                                                markdown: fullText,
+                                                title: 'AI 回复',
+                                                icon: '💬',
+                                                theme: config.get('render.theme') || 'light',
+                                                width: config.get('render.width') || 800
+                                            })
+                                            const replyResult = await this.reply(segment.image(imageBuffer), quoteReply)
+                                            this.handleAutoRecall(replyResult, false)
+                                            return true
+                                        } catch {
+                                            return false
+                                        }
+                                    }
+                                    if (mode === 'forward' || mode === 'auto') {
+                                        try {
+                                            // 转发卡片内的段落改为按语义切片，替换原先只按空行拆分的硬规则
+                                            const paragraphs = splitMessageNatural(fullText, {
+                                                chunkSize: 300,
+                                                maxChunk: 500,
+                                                mergeThreshold: 24
+                                            })
+                                            if (paragraphs.length > 0) {
+                                                await this.sendForwardMsg(
+                                                    longTextCfg.forwardTitle || 'AI 回复',
+                                                    paragraphs
+                                                )
+                                                return true
+                                            }
+                                        } catch {
+                                            /* 转发失败回退逐条 */
+                                        }
+                                    }
+                                    return false
+                                },
+                                onSegmentSent(index, total, messageId) {
+                                    if (index === 0 && messageId) {
+                                        this.handleAutoRecall({ message_id: messageId }, false)
                                     }
                                 }
+                            })
+                            if (sent.folded || sent.messageIds.length > 0) {
                                 handled = true
                             }
                         }
                     }
 
-                    // 默认直接输出
+                    // 默认直接输出（分段发送未接管时的兜底）
                     if (!handled) {
                         const pureText = this.formatReplyTextOnly(result.response) ?? ''
                         const isToolNoise =
@@ -806,32 +823,13 @@ export class Chat extends plugin {
     }
 
     /**
-     * 格式化回复
+     * 兼容入口：统一走 messageSegment 的语义分段实现。
+     * 仅保留方法签名，避免历史调用点失效。
+     * @param {string} text - 待拆分文本
+     * @returns {string[]} 句子数组
      */
     splitIntoSentences(text) {
-        if (!text) return []
-        const lines = text.split(/\n+/)
-        const sentences = []
-        for (const line of lines) {
-            if (!line.trim()) continue
-            const parts = line.split(/(?<=[。！？!?.…])\s*/)
-            for (const part of parts) {
-                const trimmed = part.trim()
-                if (trimmed) sentences.push(trimmed)
-            }
-        }
-        const merged = []
-        let buffer = ''
-        for (const s of sentences) {
-            if (buffer.length + s.length < 20 && buffer) {
-                buffer += s
-            } else {
-                if (buffer) merged.push(buffer)
-                buffer = s
-            }
-        }
-        if (buffer) merged.push(buffer)
-        return merged
+        return splitIntoSentencesNatural(text)
     }
 
     formatReply(response) {

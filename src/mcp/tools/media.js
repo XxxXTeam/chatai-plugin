@@ -448,14 +448,18 @@ export const mediaTools = [
                     if (!args.url || !args.audio || !args.title) {
                         return { success: false, error: 'custom类型需要提供 url, audio, title' }
                     }
+                    // 平台类型只能放在 data.type 里（OneBot 规范），不能用 subType
+                    // 散落字段——否则序列化后 data.type 缺失，协议端拒绝生成卡片
                     musicSeg = {
                         type: 'music',
-                        subType: 'custom',
-                        url: args.url,
-                        audio: args.audio,
-                        title: args.title,
-                        content: args.content || '',
-                        image: args.image || ''
+                        data: {
+                            type: 'custom',
+                            url: args.url,
+                            audio: args.audio,
+                            title: args.title,
+                            content: args.content || '',
+                            image: args.image || ''
+                        }
                     }
                 } else {
                     if (!args.id) {
@@ -463,8 +467,10 @@ export const mediaTools = [
                     }
                     musicSeg = {
                         type: 'music',
-                        subType: args.type,
-                        id: args.id
+                        data: {
+                            type: args.type,
+                            id: args.id
+                        }
                     }
                 }
 

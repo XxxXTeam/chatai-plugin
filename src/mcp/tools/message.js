@@ -22,6 +22,7 @@ import {
     StandardRawApi
 } from '../../core/platform/index.js'
 import { ForwardMessageParser, IcqqMessageUtils, ProtobufUtils, MsgRecordExtractor } from '../../utils/messageParser.js'
+import { splitMessage as splitMessageNatural } from '../../utils/messageSegment.js'
 
 const MAX_DEEP_PARSE_DEPTH = 10
 
@@ -2260,11 +2261,24 @@ export const messageTools = [
                 const botId = botInfo.user_id || '10000'
                 const senderName = args.sender_name || botInfo.nickname || 'Bot'
 
-                // 分割长消息
+                // 分割长消息：按语义分段（发言单元优先、标点级断点），
+                // 天然分段超过 chunkSize 时才继续按标点细分，杜绝过去 2000 字硬切把完整句子拦腰截断
+                const naturalSegments = splitMessageNatural(content, {
+                    chunkSize: Math.max(chunkSize, 300),
+                    maxChunk: chunkSize,
+                    mergeThreshold: 24
+                })
                 const chunks = []
-                for (let i = 0; i < content.length; i += chunkSize) {
-                    chunks.push(content.slice(i, i + chunkSize))
+                for (const seg of naturalSegments) {
+                    if (seg.length <= chunkSize) {
+                        chunks.push(seg)
+                        continue
+                    }
+                    for (let i = 0; i < seg.length; i += chunkSize) {
+                        chunks.push(seg.slice(i, i + chunkSize))
+                    }
                 }
+                if (chunks.length === 0) chunks.push('')
 
                 const hasExplicitGroup = Boolean(args.group_id)
                 const hasExplicitUser = Boolean(args.user_id)

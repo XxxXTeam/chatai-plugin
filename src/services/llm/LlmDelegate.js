@@ -40,12 +40,27 @@ function configGetFallback() {
  * 渠道对象已经是 normalizeAdvanced 后的形态，advanced.streaming.enabled 不会缺失。
  * @param {string} [model] - 目标模型（空则跳过模型匹配）
  * @param {string} [groupId] - 群组 ID（传群独立渠道优先）
+ * @param {string} [preferredChannelId] - 调用方已选定的渠道 ID（最高优先复用）
  * @returns {Promise<{channels: Array, preferChannel: Object|null}>} 候选渠道与首选渠道
  */
-async function resolveDelegateCandidates(model, groupId) {
+async function resolveDelegateCandidates(model, groupId, preferredChannelId = null) {
     await channelManager.init()
     let preferred = null
-    if (groupId) {
+
+    /*
+     * 优先复用调用方已经选定的渠道（LlmService.getChatClient 选渠结果）。
+     * 没有该引用时仍精确复用同一渠道来源（按 id 从 channelManager 取），
+     * 保证旁路调用的渠道与主对话选渠逻辑完全一致，流式开关必然同源。
+     */
+    if (preferredChannelId) {
+        const matched = channelManager.getAll().find(ch => String(ch.id) === String(preferredChannelId))
+        if (matched) {
+            preferred = matched
+        } else {
+            logger.warn(`[LlmDelegate] 指定的首选渠道不存在, 回退常规候选: ${preferredChannelId}`)
+        }
+    }
+    if (!preferred && groupId) {
         try {
             const sm = await import('../scope/ScopeManager.js').then(m => m.getScopeManager())
             const groupChannelConfig = await sm.getGroupChannelConfig(String(groupId))
@@ -209,6 +224,7 @@ async function reportDelegateFailure(
  * @param {Object} [options] - 调用选项
  * @param {string} [options.model] - 目标模型
  * @param {string} [options.groupId] - 群组 ID
+ * @param {string} [options.channelId] - 优先复用的渠道 ID（复用 getChatClient 已选渠道）
  * @param {number} [options.maxToken] - 最大 token
  * @param {number} [options.temperature] - 温度
  * @param {string} [options.systemOverride] - 系统提示词
@@ -223,7 +239,11 @@ export async function callWithChannelDelegate(message, options = {}) {
     const { maxRetries, retryDelay, backoff, retryJitter, enableChannelSwitch } = getDelegateFallbackConfig()
     const max = options.maxRetries ?? maxRetries
 
-    const { channels, preferChannel } = await resolveDelegateCandidates(options.model, options.groupId)
+    const { channels, preferChannel } = await resolveDelegateCandidates(
+        options.model,
+        options.groupId,
+        options.channelId
+    )
     if (channels.length === 0) {
         throw new Error('[LlmDelegate] 未找到可用的 API 渠道配置')
     }
