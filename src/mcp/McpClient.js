@@ -262,6 +262,12 @@ export class McpClient {
         this.stdioProbeAbortController = null
         /** @type {Set<AbortController>} 活跃 HTTP/SSE 请求 */
         this.httpAbortControllers = new Set()
+        /** @type {boolean} 「服务器不支持 ping」只记录一次，避免每次心跳刷日志 */
+        this.ssePingUnsupportedLogged = false
+        /** @type {number} 迟到响应丢弃计数（限频日志用） */
+        this.sseLateResponseCount = 0
+        /** @type {number|null} 最近一次迟到响应日志时间戳（限频日志用） */
+        this.sseLastLateResponseAt = null
         /** @type {Object} 当前客户端能力 */
         this.clientCapabilities = config.clientCapabilities || {}
         /** @type {{name: string, version: string}} 当前客户端信息 */
@@ -1051,9 +1057,18 @@ export class McpClient {
             this.handleNotification(message)
         } else if (hasId) {
             const unknownPendingIds = Array.from(this.pendingRequests.keys())
-            logger.warn(
-                `[MCP] Received response for unknown request id: ${message.id}, pendingIds=[${unknownPendingIds.join(', ')}]`
-            )
+            // 心跳轮换或服务器悄悄重启后，同一 POST 连接可能已被清理
+            // （shutdown/重连），而服务器仍按旧连接补发响应。该响应已经
+            // 没有消费者：丢弃并做限频日志，不用 32 秒级的僵尸告警刷屏。
+            this.sseLateResponseCount = (this.sseLateResponseCount || 0) + 1
+            const throttleSeconds = 30
+            const nowMs = Date.now()
+            if (!this.sseLastLateResponseAt || nowMs - this.sseLastLateResponseAt > throttleSeconds * 1000) {
+                this.sseLastLateResponseAt = nowMs
+                logger.debug(
+                    `[MCP] 忽略迟到响应 id=${message.id}, pendingIds=[${unknownPendingIds.join(', ')}]（阈值 ${throttleSeconds}s 内仅记录一次）`
+                )
+            }
         }
     }
 
@@ -1091,14 +1106,10 @@ export class McpClient {
             this.eventSource.close()
             this.eventSource = null
         }
-        this.abortHttpRequests()
+        // 断开时只清理本实例挂起请求自己的控制器与等待者，
+        // 不触发全局 HTTP abort：全局 abort 会误杀其它仍健康的 SSE POST 连接。
         this.resetMessageBuffer()
-
-        // Reject all pending requests
-        for (const [, { reject }] of this.pendingRequests) {
-            reject(new Error('Connection lost'))
-        }
-        this.pendingRequests.clear()
+        this.rejectPendingRequests(new Error('Connection lost'))
 
         // 只有活动客户端才允许自动重连；删除/断开后的旧实例不能再重连
         if (shouldReconnect) {
@@ -1150,7 +1161,7 @@ export class McpClient {
 
         this.heartbeatInterval = setInterval(async () => {
             try {
-                await this.ping()
+                await this.pingForHeartbeat()
             } catch (error) {
                 logger.warn('[MCP] Heartbeat failed:', error)
                 this.handleDisconnect()
@@ -1171,6 +1182,33 @@ export class McpClient {
             return true
         } catch {
             // Ping not supported, ignore
+            return false
+        }
+    }
+
+    /**
+     * 心跳专用探活：区分「链路故障」与「服务器不支持 ping」。
+     * - 服务器明确返回 JSON-RPC method-not-found（-32601）等 → 链路健康，
+     *   心跳退化为只依赖 EventSource 状态与下一次请求，不误触发重连；
+     * - 传输级故障（超时/网络/断连/abort）→ 断链，交给 handleDisconnect 重连。
+     * @returns {Promise<boolean>} 链路是否健康
+     */
+    async pingForHeartbeat() {
+        try {
+            await this.request('ping', undefined, this.timeouts.ping)
+            return true
+        } catch (error) {
+            const message = String(error?.message || error)
+            const rpcNotSupported = /method not found|unknown method|-32601/i.test(message)
+            const linkProblem = /timeout|aborted|failed|connection lost|econn|network/i.test(message)
+            if (rpcNotSupported && !linkProblem) {
+                if (!this.ssePingUnsupportedLogged) {
+                    this.ssePingUnsupportedLogged = true
+                    logger.debug('[MCP] 服务器不支持 ping，心跳退化为 EventSource 状态监听')
+                }
+                return true
+            }
+            logger.warn(`[MCP] Heartbeat ping failed: ${message}`)
             return false
         }
     }
@@ -1404,6 +1442,8 @@ export class McpClient {
 
             this.pendingRequests.set(request.id, {
                 method: request.method,
+                // 挂起请求的底层控制器：断开时逐个 abort，绝不悬空等待
+                controller,
                 resolve: result => {
                     clearTimeout(timer)
                     this.pendingRequests.delete(request.id)
@@ -2290,6 +2330,26 @@ export class McpClient {
     abortHttpRequests() {
         for (const controller of this.httpAbortControllers) controller.abort()
         this.httpAbortControllers.clear()
+    }
+
+    /**
+     * 等待者感知式拒绝全部挂起请求。
+     * 每个 pending 条目持有自己的 AbortController：
+     * 先 abort 底层连接（让 node-fetch 立刻抛出并离开），再 reject 等待者；
+     * resolve/reject 闭包自身会 clearTimeout 并从表中删除条目，最后整表清空。
+     * @param {Error} error - 拒绝原因
+     * @returns {void}
+     */
+    rejectPendingRequests(error) {
+        this.pendingRequests.forEach(({ controller, reject }) => {
+            try {
+                controller?.abort()
+            } catch {
+                /* 控制器可能已被超时路径中止，忽略 */
+            }
+            reject(error)
+        })
+        this.pendingRequests.clear()
     }
 
     async deleteHttpSession() {
