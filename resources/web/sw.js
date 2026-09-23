@@ -1,12 +1,9 @@
 /* eslint-disable */
 
-const BUILD_VERSION = '739efbc297dd'
+const BUILD_VERSION = '3ed1457c6001'
 const CACHE_NAME = 'chatai-assets-' + BUILD_VERSION
 const BASE = '/chatai'
 const PRECACHE = [
-    "/chatai/_next/static/UweXgCuGvNoi9vxKyv8eb/_buildManifest.js",
-    "/chatai/_next/static/UweXgCuGvNoi9vxKyv8eb/_clientMiddlewareManifest.json",
-    "/chatai/_next/static/UweXgCuGvNoi9vxKyv8eb/_ssgManifest.js",
     "/chatai/_next/static/chunks/1cbccc39b319e66a.js",
     "/chatai/_next/static/chunks/1de6a45627b906d0.js",
     "/chatai/_next/static/chunks/2859f476bcae8cb4.js",
@@ -79,6 +76,9 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/ff1a16fafef87110.js",
     "/chatai/_next/static/chunks/turbopack-116fa6931d85daf2.js",
     "/chatai/_next/static/media/favicon.0b3bf435.ico",
+    "/chatai/_next/static/wz9GYsHLehI8x9mLVhvxV/_buildManifest.js",
+    "/chatai/_next/static/wz9GYsHLehI8x9mLVhvxV/_clientMiddlewareManifest.json",
+    "/chatai/_next/static/wz9GYsHLehI8x9mLVhvxV/_ssgManifest.js",
     "/chatai/favicon.ico",
     "/chatai/file.svg",
     "/chatai/globe.svg",
@@ -121,18 +121,55 @@ function isHtmlRequest(request) {
     )
 }
 
+function isApiRequest(request) {
+    const url = new URL(request.url)
+    if (!url.pathname.startsWith(BASE + '/')) return false
+    return url.pathname.startsWith(BASE + '/api/') || request.headers.get('x-requested-with') === 'XMLHttpRequest'
+}
+
+/**
+ * 判断请求路径是否为可预缓存的静态资源。可预缓存资源 cache-first,命中即离线可读。
+ * @param {string} urlPathname - 请求路径
+ * @returns {boolean} 是否为可预缓存的静态资源
+ */
+function isCacheableAsset(urlPathname) {
+    return urlPathname.startsWith(BASE + '/_next/') || urlPathname.endsWith('.ico') ||
+        urlPathname.endsWith('.png') || urlPathname.endsWith('.svg')
+}
+
 self.addEventListener('fetch', event => {
     const { request } = event
     const url = new URL(request.url)
     if (url.pathname === BASE + '/' + 'sw.js') return
     if (request.method !== 'GET' || !isAppRequest(request)) return
+    if (isApiRequest(request)) return
+    if (isCacheableAsset(url.pathname)) {
+        event.respondWith(
+            caches.match(request).then(cached => {
+                if (cached) return cached
+                return fetch(request).then(response => {
+                    if (response && response.ok) {
+                        const copy = response.clone()
+                        void caches.open(CACHE_NAME).then(cache => cache.put(request, copy))
+                    }
+                    return response
+                })
+            })
+        )
+        return
+    }
+    const cacheUpdate = response => {
+        if (response && response.ok) {
+            const copy = response.clone()
+            void caches.open(CACHE_NAME).then(cache => cache.put(request, copy))
+        }
+    }
 
     if (isHtmlRequest(request)) {
         event.respondWith(
             fetch(request)
                 .then(response => {
-                    const copy = response.clone()
-                    void caches.open(CACHE_NAME).then(cache => cache.put(request, copy))
+                    cacheUpdate(response)
                     return response
                 })
                 .catch(() =>
@@ -145,19 +182,13 @@ self.addEventListener('fetch', event => {
         return
     }
     event.respondWith(
-        caches.match(request).then(cached => {
-            if (cached) return cached
-            return fetch(request)
-                .then(response => {
-                    if (response && response.ok) {
-                        const copy = response.clone()
-                        void caches.open(CACHE_NAME).then(cache => cache.put(request, copy))
-                    }
-                    return response
-                })
-                .catch(() =>
-                    caches.match(BASE + '/').then(fallback => fallback || Response.error())
-                )
-        })
+        fetch(request)
+            .then(response => {
+                cacheUpdate(response)
+                return response
+            })
+            .catch(() =>
+                caches.match(BASE + '/').then(fallback => fallback || Response.error())
+            )
     )
 })
