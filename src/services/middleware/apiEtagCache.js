@@ -133,6 +133,26 @@ class ApiEtagCache {
     }
 
     /**
+     * 按前缀删除条目（写操作失效用）。
+     * 键形如 `${identity}\u0000${originalUrl}`；prefix 传 `${identity}\u0000` 即可
+     * 删除该身份的全部分桶，传更完整的 `${identity}\u0000/api/channels` 可细化到子资源。
+     * @param {string} prefix - 键前缀
+     * @returns {number} 删除的条目数
+     */
+    deletePrefix(prefix) {
+        let removed = 0
+        for (const key of Array.from(this.map.keys())) {
+            if (key.startsWith(prefix)) {
+                const entry = this.map.get(key)
+                this.map.delete(key)
+                this.totalBytes -= entry?.size || 0
+                removed += 1
+            }
+        }
+        return removed
+    }
+
+    /**
      * 清空全部缓存
      * @returns {void}
      */
@@ -208,6 +228,18 @@ export function createApiEtagCacheMiddleware(options = {}) {
             : req => req.user?.jti ?? ''
 
     return function apiEtagCacheMiddleware(req, res, next) {
+        /*
+         * 非 GET 且路径带 /api 的写操作（POST/PUT/PATCH/DELETE）通过时，
+         * 按「身份 + 站点资源前缀」失效对应 GET 缓存条目。
+         * 前缀取到 originalUrl 的 /api 段结束（含下一路径段边界，
+         * 如 /api/channels），保证同资源的列表/详情/统计一并刷新。
+         */
+        if (req.method !== 'GET' && req.path.startsWith(cache.pathPrefix)) {
+            const identity = identityResolver(req) ?? ''
+            const sitePrefix = String(req.path).match(/^(\/api(?:\/[^/]+)?)/)?.[1] || cache.pathPrefix
+            const fullPrefix = `${identity}\u0000${sitePrefix}`
+            cache.deletePrefix(fullPrefix)
+        }
         if (req.method !== 'GET') return next()
         if (!req.path.startsWith(cache.pathPrefix)) return next()
 
@@ -260,6 +292,19 @@ export function createApiEtagCacheMiddleware(options = {}) {
         }
         next()
     }
+}
+
+/**
+ * 使指定身份的指定资源前缀缓存失效。
+ * 写操作（POST/PUT/PATCH/DELETE）后由中间件自动按前缀调用；
+ * 也供测试与运维显式刷新。
+ * @param {string} identity - 身份标识（同缓存键第一段）
+ * @param {string} sitePrefix - 资源前缀（如 /api/channels）
+ * @returns {number} 删除的条目数
+ */
+export function invalidateApiEtagCache(identity, sitePrefix) {
+    if (!activeCache) return 0
+    return activeCache.deletePrefix(`${identity}\u0000${sitePrefix}`)
 }
 
 /**
