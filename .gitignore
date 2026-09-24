@@ -57,3 +57,4 @@ frontend/
 pnpm-lock.yaml
 .eslintcache
 .lsp-mcp/
+test/

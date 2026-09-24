@@ -228,8 +228,56 @@ export class AIManagement extends plugin {
      */
     async managementPanel() {
         try {
+            if (
+                this.e?.self_id === 'stdin' ||
+                this.e?.adapter?.id === 'stdin' ||
+                this.e?.bot?.adapter?.name === 'stdin'
+            ) {
+                await this.sendPanelInfoToStdin()
+                return
+            }
             await this.sendPanelInfo(false)
         } catch (err) {
+            await this.reply(`获取管理面板失败: ${err.message}`, true)
+        }
+    }
+
+    /**
+     * 控制台（stdin）输出管理面板登录信息。
+     * @param {boolean} [permanent=false] - 是否输出永久有效链接
+     * @returns {Promise<void>}
+     *
+     * @param {boolean} [permanent=false] - 是否输出永久有效链接
+     * @returns {Promise<void>}
+     */
+    async sendPanelInfoToStdin(permanent = false) {
+        try {
+            const webServer = getWebServer()
+            const loginInfo = webServer.getLoginInfo(permanent)
+            const { localUrls, localIPv6Urls, publicUrl, publicIPv6Url, customUrls, validity } = loginInfo
+
+            const lines = [`🔐 AI插件管理面板（${validity}）`]
+            if (localUrls && localUrls.length > 0) {
+                lines.push('', '📍 本地地址（IPv4）：', ...localUrls)
+            }
+            if (localIPv6Urls && localIPv6Urls.length > 0) {
+                lines.push('', '📍 本地地址（IPv6）：', ...localIPv6Urls)
+            }
+            if (publicUrl) {
+                lines.push('', '🌐 公网地址：', publicUrl)
+            }
+            if (publicIPv6Url && publicIPv6Url !== publicUrl) {
+                lines.push('', '🌐 公网地址（IPv6）：', publicIPv6Url)
+            }
+            if (customUrls && customUrls.length > 0) {
+                for (const custom of customUrls) {
+                    lines.push('', `🔗 ${custom.label}：`, custom.url)
+                }
+            }
+            lines.push('', '📌 链接包含登录凭证，请勿分享')
+            await this.reply(lines.filter(Boolean).join('\n'), false)
+        } catch (err) {
+            logger.error('[Management] stdin 面板输出失败:', err.message)
             await this.reply(`获取管理面板失败: ${err.message}`, true)
         }
     }
@@ -239,6 +287,14 @@ export class AIManagement extends plugin {
      */
     async permanentPanel() {
         try {
+            if (
+                this.e?.self_id === 'stdin' ||
+                this.e?.adapter?.id === 'stdin' ||
+                this.e?.bot?.adapter?.name === 'stdin'
+            ) {
+                await this.sendPanelInfoToStdin(true)
+                return
+            }
             await this.sendPanelInfo(true, false)
         } catch (err) {
             await this.reply(`获取管理面板失败: ${err.message}`, true)

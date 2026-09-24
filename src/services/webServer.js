@@ -785,10 +785,10 @@ class WebServer {
         const token = authHandler.generateToken(5 * 60, permanent)
         const mountPath = this.mountPath
         const baseLocalAddrs = this.addresses?.local || [`http://127.0.0.1:${this.port}`]
-        const localUrls = baseLocalAddrs.map(addr => `${addr}${mountPath}/login/token?token=${token}`)
-        const localIPv6Urls = (this.addresses?.localIPv6 || []).map(
-            addr => `${addr}${mountPath}/login/token?token=${token}`
-        )
+        const localUrls = [...new Set(baseLocalAddrs.map(addr => `${addr}${mountPath}/login/token?token=${token}`))]
+        const localIPv6Urls = [
+            ...new Set((this.addresses?.localIPv6 || []).map(addr => `${addr}${mountPath}/login/token?token=${token}`))
+        ]
         const loginLinks = config.get('web.loginLinks') || []
         const customUrls = loginLinks.map(link => ({
             label: link.label,

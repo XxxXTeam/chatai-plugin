@@ -277,10 +277,51 @@ test('messageSegment: 裁剪后每条样本逐条拼接无损', () => {
     }
 })
 
+test('messageSegment: 统一发送入口-编号前缀逐条剥离', async () => {
+    const sent = []
+    const fakeEvent = {
+        reply: async (message, quote, replyOptions) => {
+            sent.push({ message, quote, replyOptions })
+            return { message_id: `id-${sent.length}` }
+        }
+    }
+    const text =
+        '1.第一条内容讲清楚背景和来龙去脉，把整段话写得足够长以便超过单条发送的阈值让分段逻辑真正生效。' +
+        '2.第二条内容继续补充细节说明具体做法，同样保持足够的长度让每一段都能独立成为一条消息发出去。' +
+        '3.第三条内容给出最终结论和后续建议，让整个回答完整收尾不留下悬空的问题继续往后补充文字。'
+    const result = await sendSegmentedMessage(fakeEvent, text, { chunkSize: 40, maxChunk: 90, shortLimit: 40 })
+    assert.ok(sent.length >= 2, `期望 2 条以上，实际 ${sent.length} 条`)
+    assert.equal(result.folded, false)
+    // 剥离编号后每条消息开头不再带「N.」形式的编号前缀
+    for (const [index, record] of sent.entries()) {
+        assert.ok(
+            !/^\s*\d+\s*[.、)]/.test(record.message),
+            `第${index + 1}条不应带编号前缀: ${JSON.stringify(record.message)}`
+        )
+    }
+    // 精确契约：把被剥离的编号按序补回去，应与原文逐字一致
+    let restored = ''
+    for (const [index, record] of sent.entries()) {
+        restored += `${index + 1}.` + record.message
+    }
+    assert.equal(restored, text, '编号剥离后补回编号应逐字等于原文')
+})
+
+test('messageSegment: stripListNumbering 只在严格递增时剥离', async () => {
+    const { stripListNumbering } = await import('../src/utils/messageSegment.js')
+    assert.deepEqual(stripListNumbering(['1.甲内容', '2.乙内容', '3.丙内容']), ['甲内容', '乙内容', '丙内容'])
+    assert.deepEqual(stripListNumbering(['1.甲内容', '3.乙内容']), ['1.甲内容', '3.乙内容'], '跳号不得剥离')
+    assert.deepEqual(stripListNumbering(['1.甲内容', '1.乙内容']), ['1.甲内容', '1.乙内容'], '重复编号不得剥离')
+    assert.deepEqual(stripListNumbering(['2.甲内容', '3.乙内容']), ['甲内容', '乙内容'], '非 1 起编号同样递增')
+    assert.deepEqual(stripListNumbering(['没编号甲', '2.乙内容']), ['没编号甲', '2.乙内容'], '首段无编号不得剥离')
+    assert.deepEqual(stripListNumbering(['甲内容']), ['甲内容'], '单段不剥离')
+})
+
 test('messageSegment: 默认导出与具名导出一致', async () => {
     const mod = await import('../src/utils/messageSegment.js')
     assert.equal(typeof mod.default.splitMessage, 'function')
     assert.equal(typeof mod.default.splitIntoSentences, 'function')
     assert.equal(typeof mod.default.calculateDelay, 'function')
+    assert.equal(typeof mod.default.stripListNumbering, 'function')
     assert.equal(typeof mod.default.sendSegmentedMessage, 'function')
 })

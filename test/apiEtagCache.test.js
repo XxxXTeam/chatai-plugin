@@ -282,3 +282,48 @@ test('clearApiEtagCache 清空后不命中历史条目', async () => {
         await close()
     }
 })
+
+test('写操作通过后按身份前缀自动失效对应 GET 缓存', async () => {
+    const stores = new Map()
+    // vite 环境不跨进程：用内存快照模拟 data store，PUT 修改再 GET
+    const app = express()
+    const middleware = createApiEtagCacheMiddleware({ identityResolver: createIdentityResolver })
+    app.use(middleware)
+    app.get('/api/channels/list', (req, res) => res.json({ channels: stores.get('channels') || [] }))
+    app.get('/api/channels/stats', (req, res) => res.json({ total: stores.get('total') || 0 }))
+    app.put('/api/channels/123', (req, res) => {
+        stores.set('channels', [{ id: '123', name: '新渠道' }])
+        stores.set('total', 1)
+        res.json({ ok: true })
+    })
+    const { baseUrl, close } = await startTestApp(app)
+    try {
+        const firstList = await fetch(`${baseUrl}/api/channels/list`, { headers: { 'x-test-user': 'user-a' } })
+        const firstStats = await fetch(`${baseUrl}/api/channels/stats`, { headers: { 'x-test-user': 'user-a' } })
+        assert.equal(firstList.status, 200)
+
+        // 写后再带旧 ETag 请求：必须回落 200 拿到新数据
+        await fetch(`${baseUrl}/api/channels/123`, {
+            method: 'PUT',
+            headers: { 'x-test-user': 'user-a', 'content-type': 'application/json' },
+            body: JSON.stringify({ name: '新渠道' })
+        })
+        const staleList = await fetch(`${baseUrl}/api/channels/list`, {
+            headers: { 'x-test-user': 'user-a', 'if-none-match': firstList.headers.get('etag') }
+        })
+        assert.equal(staleList.status, 200, '写操作后旧 ETag 不得命中 304')
+        assert.deepEqual((await staleList.json()).channels, [{ id: '123', name: '新渠道' }])
+        const staleStats = await fetch(`${baseUrl}/api/channels/stats`, {
+            headers: { 'x-test-user': 'user-a', 'if-none-match': firstStats.headers.get('etag') }
+        })
+        assert.equal(staleStats.status, 200, '同资源前缀的其它端点同样失效')
+
+        // 其它身份不受影响
+        const otherView = await fetch(`${baseUrl}/api/channels/list`, {
+            headers: { 'x-test-user': 'user-b', 'if-none-match': firstList.headers.get('etag') }
+        })
+        assert.equal(otherView.status, 200, '身份隔离的缓存不受他身份写操作影响')
+    } finally {
+        await close()
+    }
+})
