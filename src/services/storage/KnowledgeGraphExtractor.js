@@ -9,7 +9,7 @@ import { knowledgeGraphService } from './KnowledgeGraphService.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
 import { resolveClientTemperature } from '../llm/TemperatureResolver.js'
-import { callWithChannelDelegate } from '../llm/LlmDelegate.js'
+import { delegateRequest } from '../llm/LlmDelegator.js'
 
 const logger = chatLogger
 
@@ -158,6 +158,8 @@ class KnowledgeGraphExtractor {
      * @param {Array} messages - 消息列表 [{role, content}]
      * @param {string} scopeId - 作用域 ID
      * @param {Object} options - 选项
+     * @returns {Promise<{entities: Array, relationships: Array, failed?: boolean}>}
+     *   失败（实体提取为空）时返回带 failed: true 的结果，供调用方区分「未提取」与「成功但无实体」
      */
     async extractFromConversation(messages, scopeId, options = {}) {
         const { minMessages = 3, extractRelations = true } = options
@@ -171,6 +173,13 @@ class KnowledgeGraphExtractor {
 
         // 提取实体
         const entities = await this.extractEntities(conversationText, scopeId)
+
+        // 实体为空（LLM 客户端缺失 / 调用失败 / 未解析出实体）时，
+        // 关系提取与图谱保存必然空跑，直接带失败标记返回，避免调用方误判为提取成功
+        if (entities.length === 0) {
+            logger.warn('[KGExtractor] 实体提取为空，图谱提取失败（跳过关系提取与保存）')
+            return { entities: [], relationships: [], failed: true }
+        }
 
         // 提取关系
         let relationships = []
@@ -188,17 +197,25 @@ class KnowledgeGraphExtractor {
 
         logger.info(`[KGExtractor] 提取完成: ${savedEntities.length} 个实体, ${savedRelationships.length} 个关系`)
 
-        return {
+        const graphPayload = {
             entities: savedEntities,
             relationships: savedRelationships
         }
+
+        // 实体校验通过但入库落空（存储层异常被逐个吞掉）时，同样以失败标记曝光
+        if (savedEntities.length === 0) {
+            graphPayload.failed = true
+            logger.warn('[KGExtractor] 实体入库为空，图谱保存失败')
+        }
+
+        return graphPayload
     }
 
     /**
      * 带渠道重试与流式遵循的辅助发送。
-     * 通过 LlmService.getChatClient 构造出的客户端带 _channelInfo（含渠道 id），
-     * 此时改走 LlmDelegate 委托（渠道 advanced.streaming + 错误重试/渠道切换）；
-     * 否则回退为直连，保持与其他 SDK 客户端的兼容。
+     * 经 LlmService.getChatClient 构造的客户端恒带完整 _channelInfo（含渠道对象），
+     * 统一走 LlmDelegator 委托（渠道 advanced.streaming + 错误重试/渠道切换/模型过滤）；
+     * 非内部客户端不再保留直连，直接抛错由调用方拒绝。
      * @param {Object} client - LLM 客户端
      * @param {Object} message - 用户消息
      * @param {Object} requestOptions - 请求选项
@@ -206,15 +223,27 @@ class KnowledgeGraphExtractor {
      * @returns {Promise<Object>} 客户端响应
      */
     async _sendWithRetry(client, message, requestOptions, caller = 'KGExtractor') {
-        const useDelegate = Boolean(client && typeof client._channelInfo?.id === 'string')
-        if (useDelegate) {
-            const delegated = await callWithChannelDelegate(message, {
-                ...requestOptions,
-                caller
-            })
-            return delegated.response
+        const useDelegate = Boolean(
+            client &&
+            typeof client._channelInfo?.id === 'string' &&
+            (typeof client.sendMessage === 'function' ||
+                typeof client.sendMessageWithHistory === 'function' ||
+                typeof client._channelInfo?.channel === 'object')
+        )
+        if (!useDelegate) {
+            throw new Error('[KGExtractor] 非内部客户端不支持发送，请使用 LlmService.getChatClient 构造')
         }
-        return await client.sendMessage(message, requestOptions)
+        const result = await delegateRequest({
+            userMessage: message,
+            initialModel: requestOptions.model || client._channelInfo?.model,
+            initialChannel: client._channelInfo?.channel || null,
+            initialClient: client,
+            clientBaseOptions: {},
+            requestOptions,
+            event: null,
+            source: caller || 'KGExtractor'
+        })
+        return result.response
     }
 
     /**

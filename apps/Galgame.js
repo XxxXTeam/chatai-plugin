@@ -328,6 +328,7 @@ async function handleGalgameReaction(e, bot) {
         }
     } catch (err) {
         gameLogger.error(' 处理表情回应失败:', err)
+        await sendGroupMessage(bot, groupId, '❌ 表情回应失败，请稍后再试')
     }
 }
 

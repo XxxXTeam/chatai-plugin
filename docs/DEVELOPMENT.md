@@ -277,21 +277,29 @@ const response = await chatService.chat({
 })
 ```
 
-### LlmDelegate（旁路调用委托）
+### LlmDelegator
 
-记忆、知识图谱、上下文总结等旁路 LLM 调用统一走 `src/services/llm/LlmDelegate.js`，与 ChatService 主路径同口径（流式遵循、错误上报、渠道切换与指数退避）：
+全项目 LLM 请求（对话、Agent、记忆、知识图谱、上下文总结/压缩、对话监控、游戏、MCP 工具、渠道健康检查与测试路由）统一走 `src/services/llm/LlmDelegator.js` 的 `delegateRequest`，由中央执行器统一做模型→渠道→Key 三级调度、渠道/Key/模型切换、错误分类、退避重试与模型-渠道过滤；调用方只组装 userMessage 与 requestOptions 模板，不再各自内联重试实现：
 
 ```javascript
-import { callWithChannelDelegate } from '../services/llm/LlmDelegate.js'
+import { delegateRequest } from '../services/llm/LlmDelegator.js'
 
-// 旁路调用（自动选渠道，失败切渠道重试）
-const { response, model, channel, stream, tries } = await callWithChannelDelegate(
-    { role: 'user', content: '总结这段对话...' },
-    { model: 'gpt-4o-mini', caller: 'MemorySummarizer', maxToken: 400 }
-)
+// 旁路调用（自动选渠道，失败切渠道重试；备选模型只在其支持的渠道上单独重试）
+const { response, usedModel, usedChannel, fallbackUsed, switchChain, retryStats } =
+    await delegateRequest({
+        userMessage: { role: 'user', content: [{ type: 'text', text: '总结这段对话...' }] },
+        initialModel: 'gpt-4o-mini',
+        initialChannel, // 调用方已选渠道（可空，委托器按模型选渠）
+        initialClient, // 可选，复用调用方客户端避免首轮重建
+        requestOptions: { maxToken: 400 },
+        event: null,
+        source: 'MemorySummarizer'
+    })
 ```
 
-重试参数读 `llm.fallback`（`maxRetries` 默认 3、`retryDelay` 默认 500ms；`enableChannelSwitch !== false` 时允许切换渠道）。渠道由 `channelManager.getActualModel` 做模型映射，开关与主路径一致。
+重试参数读 `llm.fallback`（`maxRetries` 默认 3、`retryDelay` 默认 500ms、`emptyRetries` 默认 2；`enableChannelSwitch !== false` 时允许切换渠道）。候选渠道全程做模型过滤（models 包含 / 通配 `*` / 模型映射目标），不支持该模型的渠道一律不参与，避免向渠道发出它没有的模型请求。
+
+`src/services/llm/LlmDelegate.js` 现仅为兼容出口，保留 `getDelegateFallbackConfig`（供配置读取链路与测试）；原 `callWithChannelDelegate` 已删除。
 
 ### ErrorNotifier（错误通知）
 

@@ -324,7 +324,9 @@ class MemorySummarizer {
                 mergedCount: 0,
                 removedCount: 0,
                 cleanedCount: 0,
-                byCategory: {}
+                byCategory: {},
+                // 存在满足条件却未能真实总结的分类时置 true，供前端区分「已总结」与「LLM 失败未总结」
+                llmSummarySkipped: false
             }
 
             // 1. 先进行简单的去重合并
@@ -376,6 +378,7 @@ class MemorySummarizer {
 
                     let finalCategoryCount = 0
                     let categorySummarized = false
+                    let categoryLlmSkipped = false
                     for (const bucket of scopeBuckets.values()) {
                         /*
                          * 原实现桶内 >5 才总结，且结果条数 >= 输入的 90% 就整体放弃，
@@ -395,8 +398,12 @@ class MemorySummarizer {
                                 groupId: bucket.groupId,
                                 llmClient: scopeClients.get(scopeKey)
                             })
-                            finalCategoryCount += summarized.length
-                            categorySummarized ||= summarized !== bucket.items
+                            // summarizeCategory 降级时返回 { skipped: true, items }，拆分数与失败标记
+                            const skipped = summarized?.skipped === true
+                            const summarizedItems = skipped ? summarized.items : summarized
+                            finalCategoryCount += summarizedItems.length
+                            categorySummarized ||= !skipped && summarizedItems !== bucket.items
+                            categoryLlmSkipped ||= skipped
                         } else {
                             finalCategoryCount += bucket.items.length
                         }
@@ -406,6 +413,11 @@ class MemorySummarizer {
                         count: finalCategoryCount,
                         summarized: categorySummarized,
                         original: categoryData.items.length
+                    }
+                    // 本分类有桶满足总结条件但 LLM 降级未总结：按分类留痕并汇总到顶层标记
+                    if (categoryLlmSkipped) {
+                        result.byCategory[category].llmSummarySkipped = true
+                        result.llmSummarySkipped = true
                     }
                 }
             }
@@ -435,7 +447,9 @@ class MemorySummarizer {
      * @param {string} category - 记忆分类
      * @param {Object[]} memories - 同一作用域中的旧记忆
      * @param {{groupId?: string|null, llmClient?: Object|null}} [options] - 总结选项
-     * @returns {Promise<Object[]>} 新记忆；未执行替换时原样返回 memories
+     * @returns {Promise<Object[]>|Promise<{skipped: boolean, items: Object[]}>}
+     *   满足总结条件但 LLM 降级（空响应/解析为空/结果完全相同）时返回 { skipped: true, items: memories }；
+     *   其余情况返回新记忆数组，未执行替换时原样返回 memories
      */
     async summarizeCategory(userId, category, memories, options = {}) {
         const categoryOptions = { groupId: null, llmClient: this.llmClient, ...options }
@@ -455,12 +469,14 @@ class MemorySummarizer {
             const response = await this.callLLM(prompt, llmClient)
 
             if (!response || response.trim() === '') {
-                return memories
+                logger.warn(`[MemorySummarizer] 分类 ${category} 总结失败，保留原始记忆: LLM 返回空响应`)
+                return { skipped: true, items: memories }
             }
 
             const parsed = parseMemorySummaryResponse(response)
             if (parsed.length === 0) {
-                return memories
+                logger.warn(`[MemorySummarizer] 分类 ${category} 总结失败，保留原始记忆: 响应解析无内容`)
+                return { skipped: true, items: memories }
             }
 
             const summarizedContents = parsed.filter(
@@ -471,7 +487,10 @@ class MemorySummarizer {
             // 原实现 90% 阈值把轻度合并也整体放弃，导致整理按钮大概率 no-op
             if (summarizedContents.length === memories.length) {
                 const identical = memories.every((m, index) => m.content === summarizedContents[index])
-                if (identical) return memories
+                if (identical) {
+                    logger.warn(`[MemorySummarizer] 分类 ${category} 总结失败，保留原始记忆: 结果与原记忆逐条相同`)
+                    return { skipped: true, items: memories }
+                }
             }
 
             const oldIds = memories.map(m => m.id)
@@ -490,7 +509,8 @@ class MemorySummarizer {
             return newMemories
         } catch (error) {
             logger.error(`[MemorySummarizer] 分类 ${category} 总结失败:`, error)
-            return memories
+            // 异常降级与正常降级保持同构：summarizeUserMemories 据此汇总 llmSummarySkipped
+            return { skipped: true, items: memories }
         }
     }
 
@@ -692,10 +712,17 @@ class MemorySummarizer {
                             ? null
                             : String(preserveTargetId(globalThis.Bot, groupId) ?? groupId)
                     const scopeId = graphGroupId ? `group:${graphGroupId}:user:${graphUserId}` : `user:${graphUserId}`
-                    await knowledgeGraphExtractor.extractFromConversation(messages, scopeId, {
+                    const extracted = await knowledgeGraphExtractor.extractFromConversation(messages, scopeId, {
                         groupId: graphGroupId
                     })
-                    result.graphExtracted = true
+                    // extractFromConversation 失败时返回 { failed: true } 而非抛错，须读取失败标记，
+                    // 否则会把「实体/关系全部提取失败」误标记为 graphExtracted: true
+                    if (extracted?.failed === true) {
+                        logger.warn('[MemorySummarizer] 知识图谱提取失败（extractor 返回失败标记），未入图')
+                        result.graphExtracted = false
+                    } else {
+                        result.graphExtracted = true
+                    }
                 } catch (graphErr) {
                     logger.debug('[MemorySummarizer] 知识图谱提取失败:', graphErr.message)
                 }

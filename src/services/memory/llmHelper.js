@@ -4,6 +4,7 @@
  */
 import { chatLogger } from '../../core/utils/logger.js'
 import { resolveClientTemperature } from '../llm/TemperatureResolver.js'
+import { delegateRequest } from '../llm/LlmDelegator.js'
 
 const logger = chatLogger
 
@@ -74,9 +75,8 @@ export async function extractMemoryLLMText(response) {
 }
 
 /**
- * 统一的 LLM 调用方法
- * 兼容多种客户端接口：sendMessage / complete / chat
- * @param {Object} llmClient - LLM 客户端实例
+ * 统一的 LLM 调用方法：全部经 LlmDelegator 委托（模型-渠道过滤/渠道切换/Key 轮换/重试统一调度）。
+ * @param {Object} llmClient - LLM 客户端实例（须为 LlmService.getChatClient 构造的内部客户端）
  * @param {string} prompt - 提示词
  * @param {Object} [options] - 调用选项
  * @param {number} [options.maxTokens=1000] - 最大 token 数
@@ -91,80 +91,33 @@ export async function callMemoryLLM(llmClient, prompt, options = {}) {
     if (!llmClient) {
         throw new Error('LLM client not configured')
     }
+    if (
+        typeof llmClient._channelInfo?.id !== 'string' ||
+        (typeof llmClient.sendMessage !== 'function' && typeof llmClient.sendMessageWithHistory !== 'function')
+    ) {
+        throw new Error('[MemoryLLM] 非内部客户端无法委托调度，请使用 LlmService.getChatClient 构造客户端')
+    }
 
     const resolvedTemp = resolveClientTemperature(llmClient, temperature)
     const tempOpts = resolvedTemp !== undefined ? { temperature: resolvedTemp } : {}
 
-    /*
-     * 内部统一客户端（LlmService 构造）走 LlmDelegate 委托：
-     * 遵循渠道 advanced.streaming 配置并在失败时做渠道上报/切换重试，
-     * 避免记忆模块在渠道故障或流式配置不匹配时直接失败。
-     */
-    const isInternalClient =
-        typeof llmClient.sendMessageWithHistory === 'function' && typeof llmClient._channelInfo?.id === 'string'
-    if (isInternalClient) {
-        const { callWithChannelDelegate } = await import('../llm/LlmDelegate.js')
-        const model = llmClient._channelInfo?.model || options.model || ''
-        const delegated = await callWithChannelDelegate(
-            { role: 'user', content: [{ type: 'text', text: prompt }] },
-            {
-                ...(model ? { model } : {}),
-                maxToken: maxTokens,
-                ...tempOpts,
-                caller,
-                /*
-                 * 渠道与作用域显式透传：
-                 * - channelId 优先复用调用方 getChatClient 已选定的渠道，
-                 *   保证流式开关与主对话同源；
-                 * - groupId 在未指定渠道时让委托优先解析群独立渠道。
-                 */
-                ...(llmClient._channelInfo?.id ? { channelId: String(llmClient._channelInfo.id) } : {}),
-                ...(options.groupId !== undefined && options.groupId !== null && options.groupId !== ''
-                    ? { groupId: String(options.groupId) }
-                    : {})
-            }
-        )
-        logger.debug(`[${caller}] LlmDelegate 调用完成: streams=${delegated.stream}, tries=${delegated.tries}`)
-        return extractMemoryLLMText(delegated.response)
-    }
-
-    try {
-        // 方式1: 内部统一客户端。该客户端同时也有 sendMessage，必须优先选择此契约；
-        // 否则字符串 prompt 会被当作内部消息对象展开，且 contents 响应无法被旧逻辑读取。
-        if (typeof llmClient.sendMessageWithHistory === 'function') {
-            const response = await llmClient.sendMessageWithHistory(
-                [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-                {
-                    maxToken: maxTokens,
-                    ...tempOpts
-                }
-            )
-            return extractMemoryLLMText(response)
-        }
-
-        // 方式2: sendMessage (SDK/包装客户端)
-        if (typeof llmClient.sendMessage === 'function') {
-            const response = await llmClient.sendMessage(prompt, { maxTokens, ...tempOpts })
-            return extractMemoryLLMText(response)
-        }
-
-        // 方式3: complete (Completion style)
-        if (typeof llmClient.complete === 'function') {
-            const response = await llmClient.complete(prompt, { maxTokens, ...tempOpts })
-            return extractMemoryLLMText(response)
-        }
-
-        // 方式4: chat (Chat style)
-        if (typeof llmClient.chat === 'function') {
-            const response = await llmClient.chat([{ role: 'user', content: prompt }], { maxTokens, ...tempOpts })
-            return extractMemoryLLMText(response)
-        }
-
-        throw new Error('Unknown LLM client type - no supported method found')
-    } catch (error) {
-        logger.error(`[${caller}] LLM call failed:`, error.message)
-        throw error
-    }
+    const model = llmClient._channelInfo?.model || options.model || ''
+    const delegated = await delegateRequest({
+        userMessage: { role: 'user', content: [{ type: 'text', text: prompt }] },
+        initialModel: model,
+        initialChannel: llmClient._channelInfo?.channel || null,
+        initialClient: llmClient,
+        clientBaseOptions: {},
+        requestOptions: {
+            ...(model ? { model } : {}),
+            maxToken: maxTokens,
+            ...tempOpts
+        },
+        event: null,
+        source: caller
+    })
+    logger.debug(`[${caller}] LlmDelegator 调用完成: model=${model}`)
+    return extractMemoryLLMText(delegated.response)
 }
 
 /**

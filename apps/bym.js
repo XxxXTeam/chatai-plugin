@@ -220,13 +220,18 @@ export class bym extends plugin {
             logger.debug(`[BYM] 关键词触发: "${matchedKeyword}"`)
         }
 
+        // 外层 catch 的失败统计需要这两个变量，故提升到 try 块之外声明
+        let bymStartTimeTotal = null
+        let bymModel = ''
+
         try {
             markMessageProcessed(e)
             logger.debug('[BYM] 伪人模式触发')
+            bymStartTimeTotal = Date.now()
             const { LlmService: llmService } = await import('../src/services/llm/LlmService.js')
             const groupBymModel = groupBymConfig?.bymModel
             const configBymModel = config.get('bym.model')
-            const bymModel =
+            bymModel =
                 groupBymModel && typeof groupBymModel === 'string' && groupBymModel.trim()
                     ? groupBymModel
                     : configBymModel && typeof configBymModel === 'string' && configBymModel.trim()
@@ -662,7 +667,23 @@ ${contextText}
 
             return true
         } catch (error) {
+            // 伪人模式需要"假装真人"，失败时不向用户发送任何提示，仅记录日志与失败统计
             logger.error('[BYM] Error:', error)
+            try {
+                await statsService.recordApiCall({
+                    channelId: 'bym',
+                    channelName: 'bym',
+                    model: bymModel || '',
+                    duration: bymStartTimeTotal ? Date.now() - bymStartTimeTotal : 0,
+                    success: false,
+                    error: error.message || String(error),
+                    source: 'bym',
+                    userId: e?.user_id ? String(e.user_id) : null,
+                    groupId: e?.group_id ? String(e.group_id) : null
+                })
+            } catch (statsErr) {
+                logger.debug('[BYM] 统计记录失败:', statsErr.message)
+            }
             return false
         }
     }

@@ -9,6 +9,7 @@ const logger = chatLogger
 import config from '../../../config/config.js'
 import { databaseService } from './DatabaseService.js'
 import { LlmService } from '../llm/LlmService.js'
+import { delegateRequest } from '../llm/LlmDelegator.js'
 import { statsService } from '../stats/StatsService.js'
 import { resolveClientTemperature } from '../llm/TemperatureResolver.js'
 import { formatUserMemoryBlock } from '../memory/MemoryService.js'
@@ -291,6 +292,10 @@ export class MemoryManager {
     async analyzeGroupContext(groupId, messages) {
         const groupConfig = config.get('memory.groupContext') || {}
 
+        let startTime = null
+        let channelInfo = null
+        let model = null
+
         try {
             // 构建对话文本
             const dialogText = messages.map(m => `[${m.nickname}]: ${m.content.substring(0, 100)}`).join('\n')
@@ -320,11 +325,6 @@ export class MemoryManager {
                 analysisTypes: analysisTypes.join('、') || undefined
             })
 
-            const startTime = Date.now()
-            const memoryModel = config.get('memory.model')
-            const client = await LlmService.getChatClient({ model: memoryModel || undefined })
-            const channelInfo = client._channelInfo || {}
-            const model = channelInfo.model || config.get('llm.defaultModel')
             const _temp = resolveClientTemperature(client, 0.3)
             const result = await this._sendMemoryLlm(
                 client,
@@ -438,6 +438,20 @@ export class MemoryManager {
             )
         } catch (error) {
             logger.debug(`[MemoryManager] 分析群 ${groupId} 上下文失败:`, error.message)
+            try {
+                await statsService.recordApiCall({
+                    channelId: channelInfo?.id || 'memory',
+                    channelName: channelInfo?.name || '记忆服务',
+                    model: model || config.get('llm.defaultModel'),
+                    duration: startTime ? Date.now() - startTime : 0,
+                    success: false,
+                    error: error.message || String(error),
+                    source: '群记忆总结',
+                    groupId
+                })
+            } catch (e) {
+                /* 统计失败不影响主流程 */
+            }
         }
     }
 
@@ -675,9 +689,14 @@ export class MemoryManager {
      * @param {string} userId
      */
     async analyzeUserConversations(userId, options = {}) {
+        let startTime2 = null
+        let channelInfo2 = null
+        let model2 = null
+        let groupId = undefined
+
         try {
             const analysisOptions = { groupId: undefined, ...options }
-            const groupId = analysisOptions.groupId
+            groupId = analysisOptions.groupId
             const memoryUserId = this.getScopedMemoryUserId(userId, groupId)
 
             const conversations = databaseService.listUserConversations(userId, {
@@ -773,14 +792,14 @@ ${dialogText}
 不要输出小标题、分隔线、步骤说明或任何形式的思考过程。
 没有任何值得记录的信息时，只输出一个字：无`
 
-            const startTime2 = Date.now()
+            startTime2 = Date.now()
             const memoryModel2 = config.get('memory.model')
             const client = await LlmService.getChatClient({
                 model: memoryModel2 || undefined,
                 ...(groupId !== null && groupId !== undefined && groupId !== '' ? { groupId: String(groupId) } : {})
             })
-            const channelInfo2 = client._channelInfo || {}
-            const model2 = channelInfo2.model || config.get('llm.defaultModel')
+            channelInfo2 = client._channelInfo || {}
+            model2 = channelInfo2.model || config.get('llm.defaultModel')
             const _temp2 = resolveClientTemperature(client, 0.3)
             const result = await this._sendMemoryLlm(
                 client,
@@ -860,6 +879,21 @@ ${dialogText}
             }
         } catch (error) {
             logger.debug(`[MemoryManager] 分析用户 ${userId} 对话失败:`, error.message)
+            try {
+                await statsService.recordApiCall({
+                    channelId: channelInfo2?.id || 'memory',
+                    channelName: channelInfo2?.name || '记忆服务',
+                    model: model2 || config.get('llm.defaultModel'),
+                    duration: startTime2 ? Date.now() - startTime2 : 0,
+                    success: false,
+                    error: error.message || String(error),
+                    source: '记忆总结',
+                    userId,
+                    ...(groupId !== undefined && groupId !== null && groupId !== '' ? { groupId } : {})
+                })
+            } catch (e) {
+                /* 统计失败不影响主流程 */
+            }
             return { success: false, error: error.message, reason: 'exception' }
         }
     }
@@ -952,6 +986,10 @@ ${dialogText}
     async extractMemoryFromConversation(userId, userMessage, assistantResponse, options = {}) {
         if (!config.get('memory.enabled')) return
 
+        let startTime3 = null
+        let channelInfo3 = null
+        let model3 = null
+
         try {
             const storageUserId = this.getScopedMemoryUserId(userId, options?.groupId)
             // 判断是否包含值得记忆的信息（放宽触发门槛，让自然陈述也能进入 LLM 兜底判定）
@@ -995,7 +1033,7 @@ ${existingMemoryList || '暂无'}
 【输出格式】
 直接输出记忆内容，每行一条，最多10条。无有效信息则输出"无"：`
 
-            const startTime3 = Date.now()
+            startTime3 = Date.now()
             const memoryModel3 = config.get('memory.model')
             const client = await LlmService.getChatClient({
                 model: memoryModel3 || undefined,
@@ -1003,8 +1041,8 @@ ${existingMemoryList || '暂无'}
                     ? { groupId: String(options.groupId) }
                     : {})
             })
-            const channelInfo3 = client._channelInfo || {}
-            const model3 = channelInfo3.model || config.get('llm.defaultModel')
+            channelInfo3 = client._channelInfo || {}
+            model3 = channelInfo3.model || config.get('llm.defaultModel')
             const _temp3 = resolveClientTemperature(client, 0.3)
             const result = await this._sendMemoryLlm(
                 client,
@@ -1050,14 +1088,31 @@ ${existingMemoryList || '暂无'}
             }
         } catch (error) {
             logger.warn('[MemoryManager] 自动提取记忆失败:', error.message)
+            try {
+                await statsService.recordApiCall({
+                    channelId: channelInfo3?.id || 'memory',
+                    channelName: channelInfo3?.name || '记忆服务',
+                    model: model3 || config.get('llm.defaultModel'),
+                    duration: startTime3 ? Date.now() - startTime3 : 0,
+                    success: false,
+                    error: error.message || String(error),
+                    source: '记忆提取',
+                    userId,
+                    ...(options?.groupId !== undefined && options?.groupId !== null && options?.groupId !== ''
+                        ? { groupId: options.groupId }
+                        : {})
+                })
+            } catch (e) {
+                /* 统计失败不影响主流程 */
+            }
         }
         return null
     }
 
     /**
-     * 带渠道委托的旁路调用：遵循渠道 advanced.streaming 并在失败时做渠道切换重试。
-     * 仅对内部统一客户端（同时具备 sendMessageWithHistory 与渠道归属 _channelInfo）
-     * 启用委托；mock/外部 SDK 客户端保持原直连语义，failed 时不改变行为。
+     * 带渠道委托的旁路调用：统一经 LlmDelegator 调度
+     * 仅接受内部统一客户端
+     * 其他客户端直接拒绝，不再保留直连路径。
      * @param {Object} client - LLM 客户端
      * @param {Object} message - 用户消息（内部格式）
      * @param {Object} requestOptions - 请求选项（含 model/maxToken/temperature 等）
@@ -1066,22 +1121,22 @@ ${existingMemoryList || '暂无'}
      */
     async _sendMemoryLlm(client, message, requestOptions, caller) {
         const isInternalClient =
-            typeof client?.sendMessageWithHistory === 'function' && typeof client?._channelInfo?.id === 'string'
-        if (isInternalClient) {
-            const { callWithChannelDelegate } = await import('../llm/LlmDelegate.js')
-            const delegated = await callWithChannelDelegate(message, {
-                ...requestOptions,
-                /*
-                 * 渠道显式复用：getChatClient 已为我们选定渠道，
-                 * 让委托优先走同一渠道，流式开关与主对话同源，
-                 * 而不是重新猜渠道（猜测失败会落到全局首个渠道 → 非流）。
-                 */
-                ...(client._channelInfo?.id ? { channelId: String(client._channelInfo.id) } : {}),
-                caller
-            })
-            return delegated.response
+            typeof client?._channelInfo?.id === 'string' &&
+            (typeof client?.sendMessage === 'function' || typeof client?.sendMessageWithHistory === 'function')
+        if (!isInternalClient) {
+            throw new Error('[MemoryManager] 非内部客户端无法委托调度，请使用 getChatClient 构造客户端')
         }
-        return await client.sendMessage(message, requestOptions)
+        const result = await delegateRequest({
+            userMessage: message,
+            initialModel: requestOptions.model || client._channelInfo?.model,
+            initialChannel: client._channelInfo?.channel || null,
+            initialClient: client,
+            clientBaseOptions: {},
+            requestOptions,
+            event: null,
+            source: caller || 'memory'
+        })
+        return result.response
     }
 
     /**
@@ -1426,6 +1481,10 @@ ${existingMemoryList || '暂无'}
             model = null
         } = options
 
+        let startApiTime = null
+        let channelInfo = null
+        let usedModel = null
+
         try {
             await this.init()
 
@@ -1500,11 +1559,11 @@ ${existingMemoryList || '暂无'}
             })
 
             // 7. 调用LLM进行总结
-            const startApiTime = Date.now()
+            startApiTime = Date.now()
             const memoryModel = model || config.get('memory.model')
             const client = await LlmService.getChatClient({ model: memoryModel || undefined })
-            const channelInfo = client._channelInfo || {}
-            const usedModel = channelInfo.model || config.get('llm.defaultModel')
+            channelInfo = client._channelInfo || {}
+            usedModel = channelInfo.model || config.get('llm.defaultModel')
 
             const _temp4 = resolveClientTemperature(client, 0.3)
             const result = await this._sendMemoryLlm(
@@ -1633,6 +1692,20 @@ ${existingMemoryList || '暂无'}
             }
         } catch (error) {
             logger.error(`[MemoryManager] 时间段总结失败 [${groupId}]:`, error.message)
+            try {
+                await statsService.recordApiCall({
+                    channelId: channelInfo?.id || 'memory',
+                    channelName: channelInfo?.name || '记忆服务',
+                    model: usedModel || config.get('llm.defaultModel'),
+                    duration: startApiTime ? Date.now() - startApiTime : 0,
+                    success: false,
+                    error: error.message || String(error),
+                    source: '时间段记忆总结',
+                    groupId
+                })
+            } catch (e) {
+                /* 统计失败不影响主流程 */
+            }
             return { success: false, error: error.message }
         }
     }

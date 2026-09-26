@@ -14,6 +14,7 @@ import { databaseService } from '../storage/DatabaseService.js'
 import { ForwardMessageParser, MessageApi } from '../../utils/messageParser.js'
 import { StandardBotApi } from '../../core/platform/index.js'
 import { resolveClientTemperature } from './TemperatureResolver.js'
+import { delegateRequest } from './LlmDelegator.js'
 import { getCachedMessage, getRecentQQBotMessages } from '../storage/MessageCache.js'
 
 /** 请求计数器条目上限，超出后清理已归零的残留键 */
@@ -388,8 +389,6 @@ export class ContextManager {
             const _temp = resolveClientTemperature(client, 0.2)
 
             const cacheGroupId = groupId || undefined
-            const hasInternalClient = typeof client?._channelInfo?.id === 'string'
-            const useDelegate = hasInternalClient && typeof client.sendMessageWithHistory === 'function'
             const summonRequestOptions = {
                 model,
                 maxToken: options.maxTokens || 400,
@@ -398,29 +397,26 @@ export class ContextManager {
                 ...(cacheGroupId ? { groupId: cacheGroupId } : {})
             }
 
-            let result
-            if (useDelegate) {
-                const { callWithChannelDelegate } = await import('./LlmDelegate.js')
-                try {
-                    const delegated = await callWithChannelDelegate(
-                        { role: 'user', content: [{ type: 'text', text: prompt }] },
-                        { ...summonRequestOptions, caller: 'ContextSummarize' }
-                    )
-                    result = delegated.response
-                } catch (delegatedError) {
-                    logger.debug('[ContextManager] 委托调用失败，回退直连:', delegatedError.message)
-                    result = await client.sendMessage(
-                        { role: 'user', content: [{ type: 'text', text: prompt }] },
-                        summonRequestOptions
-                    )
-                }
-            } else {
-                result = await client.sendMessage(
-                    { role: 'user', content: [{ type: 'text', text: prompt }] },
-                    summonRequestOptions
-                )
+            /* 委托入口：具备任一发送契约即委托（mock/外部客户端同样经委托调度，不再保留直连） */
+            const canSend =
+                typeof client?.sendMessage === 'function' || typeof client?.sendMessageWithHistory === 'function'
+            if (!canSend) {
+                logger.warn('[ContextManager] 总结会话客户端无可发送契约，跳过 LLM 总结')
+                return false
             }
-            const summaryText = result.contents?.[0]?.text?.trim()
+
+            const delegated = await delegateRequest({
+                userMessage: { role: 'user', content: [{ type: 'text', text: prompt }] },
+                initialModel: model,
+                initialChannel: client._channelInfo?.channel || null,
+                initialClient: client,
+                clientBaseOptions: {},
+                requestOptions: summonRequestOptions,
+                event: null,
+                source: 'context-summarize'
+            })
+            const result = delegated.response
+            const summaryText = result?.contents?.[0]?.text?.trim()
             if (!summaryText) return false
 
             // 先写入总结、确认落库后再裁剪旧消息
@@ -1936,30 +1932,25 @@ export class ContextManager {
                 disableHistorySave: true,
                 ...(groupId || undefined ? { groupId } : {})
             }
-            const useCompressDelegate =
-                typeof client?.sendMessageWithHistory === 'function' && typeof client?._channelInfo?.id === 'string'
-            let result
-            if (useCompressDelegate) {
-                const { callWithChannelDelegate } = await import('./LlmDelegate.js')
-                try {
-                    const delegated = await callWithChannelDelegate(
-                        { role: 'user', content: [{ type: 'text', text: prompt }] },
-                        { ...compressRequestOptions, caller: 'ContextCompress' }
-                    )
-                    result = delegated.response
-                } catch (delegatedError) {
-                    logger.debug('[ContextManager] 压缩委托调用失败，回退直连:', delegatedError.message)
-                    result = await client.sendMessage(
-                        { role: 'user', content: [{ type: 'text', text: prompt }] },
-                        compressRequestOptions
-                    )
-                }
-            } else {
-                result = await client.sendMessage(
-                    { role: 'user', content: [{ type: 'text', text: prompt }] },
-                    compressRequestOptions
-                )
+            /* 委托入口：具备任一发送契约即委托，无契约回退截断策略 */
+            const canCompressSend =
+                typeof client?.sendMessage === 'function' || typeof client?.sendMessageWithHistory === 'function'
+            if (!canCompressSend) {
+                logger.warn('[ContextManager] 压缩会话客户端无可发送契约，回退截断策略')
+                return this._compressByTruncate(messages, ctxConfig)
             }
+
+            const delegated = await delegateRequest({
+                userMessage: { role: 'user', content: [{ type: 'text', text: prompt }] },
+                initialModel: model,
+                initialChannel: client._channelInfo?.channel || null,
+                initialClient: client,
+                clientBaseOptions: {},
+                requestOptions: compressRequestOptions,
+                event: null,
+                source: 'context-compress'
+            })
+            const result = delegated.response
             const summaryText = result.contents?.[0]?.text?.trim()
 
             if (summaryText) {

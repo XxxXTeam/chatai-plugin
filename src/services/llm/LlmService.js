@@ -202,11 +202,18 @@ export class LlmService {
         if (options.endpoints) {
             clientConfig.endpoints = { ...clientConfig.endpoints, ...options.endpoints }
         }
-        if (options.experimental) {
+        if (options.experimental && Object.keys(options.experimental).length > 0) {
             clientConfig.experimental = options.experimental
         }
-        if (options.openaiResponses) {
+        if (options.openaiResponses && Object.keys(options.openaiResponses).length > 0) {
             clientConfig.openaiResponses = options.openaiResponses
+        }
+        // Responses WS：渠道 experimental.ws 与显式 openaiWs 均透传（适配器合并语义：单次请求 > clientWs > experimental.ws）
+        if (options.experimental?.ws && Object.keys(options.experimental.ws).length > 0) {
+            clientConfig.openaiWs = options.experimental.ws
+        }
+        if (options.openaiWs && Object.keys(options.openaiWs).length > 0) {
+            clientConfig.openaiWs = { ...(clientConfig.openaiWs || {}), ...options.openaiWs }
         }
 
         // 传递图片处理配置

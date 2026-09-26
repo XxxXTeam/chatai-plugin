@@ -10,7 +10,6 @@ import { LlmService } from './LlmService.js'
 import { imageService } from '../media/ImageService.js'
 import { contextManager, buildGroupEnvironmentPrompt, AUTO_CLEAN_NOTICE } from './ContextManager.js'
 import { channelManager } from './ChannelManager.js'
-import { computeDelay, classifyRetryError, expectRetryable, pickChannelRetryPolicy } from './BackoffPolicy.js'
 import historyManager from '../../core/utils/history.js'
 import config from '../../../config/config.js'
 import { getAllTools, setToolContext } from '../../core/utils/toolAdapter.js'
@@ -35,6 +34,7 @@ import { applySkillToolConstraints, getSkillToolConstraints } from '../skills/Sk
 import { resolveToolPermission } from '../tools/ToolPermission.js'
 import { normalizeInlineImageContent } from './InlineImageDataUrl.js'
 import { PromptCacheService } from './PromptCacheService.js'
+import { delegateRequest } from './LlmDelegator.js'
 import { sendSegmentedMessage } from '../../utils/messageSegment.js'
 
 let scopeManager = null
@@ -1083,45 +1083,6 @@ export class ChatService {
         )
 
         try {
-            if (channel) {
-                channelManager.startRequest(channel.id)
-            }
-
-            if (event && event.reply) {
-                // 中间文本去重缓存：多轮工具调用中 AbstractClient 每轮回调
-                // 携带的是当前轮模型的全文文本（非增量），直接逐条发送会重复发
-                // 出已发出的前缀段落，形成一句一句的碎片刷屏
-                let intermediateSent = ''
-                client.setOnMessageWithToolCall(async data => {
-                    if (data?.intermediateText && data.isIntermediate) {
-                        const text = data.intermediateText.trim()
-                        if (!text) return
-                        if (this.isPureToolCallJson(text)) {
-                            return
-                        }
-                        // 增量去重：新文本以已发送内容为前缀时只发新增部分
-                        let pending = text
-                        if (intermediateSent && text.startsWith(intermediateSent)) {
-                            pending = text.slice(intermediateSent.length).trim()
-                        }
-                        intermediateSent = text
-                        if (!pending) return
-                        // 中间插话统一走语义分段发送，符合真人逐段节发习惯
-                        try {
-                            await sendSegmentedMessage(event, pending, {
-                                quote: true,
-                                shortLimit: 100,
-                                foldLimit: 800
-                            })
-                        } catch (err) {
-                            logger.debug('[ChatService] 中间消息分段发送失败:', err.message)
-                        }
-                    } else if (data?.type === 'text' && data.text) {
-                        await event.reply(data.text, true)
-                    }
-                })
-            }
-
             // 收集调试信息
             if (debugInfo) {
                 debugInfo.request = {
@@ -1194,733 +1155,108 @@ export class ChatService {
                 logger.debug(`[ChatService] 会话 ${conversationId} 检测到并发请求: ${concurrentCount}`)
             }
             {
-                const fallbackConfig = config.get('llm.fallback') || {}
-                const fallbackEnabled = fallbackConfig.enabled !== false
-                const fallbackModels = fallbackConfig.models || []
-                const maxRetries = fallbackConfig.maxRetries || 3
-                const retryDelay = fallbackConfig.retryDelay || 500
-                const notifyOnFallback = fallbackConfig.notifyOnFallback
-                const enableChannelSwitch = fallbackConfig.enableChannelSwitch !== false // 默认启用渠道切换
-                const enableKeyRotation = fallbackConfig.enableKeyRotation !== false // 默认启用Key轮换
-                const emptyRetries = fallbackConfig.emptyRetries ?? 2 // 空响应重试次数（0 表示禁用空重试）
-                // 重试抖动比例，钳制到 [0, 0.8]；0 表示无抖动
-                const retryJitter = Math.max(0, Math.min(0.8, Number(fallbackConfig.retryJitter ?? 0.3)))
-                // 全局兜底退避策略（渠道级 retry.backoff 缺失时使用）
-                const fallbackBackoff = fallbackConfig.backoff || 'exponential'
-
-                const modelsToTry = [llmModel, ...fallbackModels.filter(m => m && m !== llmModel)]
-                let response = null
-                let usedModel = llmModel
-                let usedChannel = channel
-                let fallbackUsed = false
-                let channelSwitched = false
-                let totalRetryCount = 0
-                let currentKeyIndex = clientOptions.keyIndex ?? -1
-                const switchChain = [] // 记录渠道/Key切换链
-
-                // 同步更新外部追踪变量的辅助函数
-                const syncTrackingVars = () => {
-                    actualUsedModel = usedModel
-                    actualUsedChannel = usedChannel
-                    actualFallbackUsed = fallbackUsed
-                    actualChannelSwitched = channelSwitched
-                    actualTotalRetryCount = totalRetryCount
-                    actualSwitchChain = [...switchChain]
-                }
-                const initialChannelInfo = channel?.name || channel?.id || 'unknown'
-                switchChain.push({ type: 'init', channel: initialChannelInfo })
-
-                // 记录重试统计信息
-                const retryStats = {
-                    totalAttempts: 0,
-                    channelsTriedForMainModel: new Set(),
-                    keysTriedPerChannel: new Map(),
-                    channelsErrorReported: new Set(),
-                    keySwitchCount: 0,
-                    errors: [],
-                    mainModelExhausted: false
+                /* 中间消息回调（跨客户端的注册函数）：委托器每次重建客户端后重挂 */
+                const attachIntermediateCallback = clientInstance => {
+                    if (!event || !event.reply) return
+                    let intermediateSent = ''
+                    clientInstance.setOnMessageWithToolCall(async data => {
+                        if (data?.intermediateText && data.isIntermediate) {
+                            const text = data.intermediateText.trim()
+                            if (!text) return
+                            if (this.isPureToolCallJson(text)) {
+                                return
+                            }
+                            // 增量去重：新文本以已发送内容为前缀时只发新增部分
+                            let pending = text
+                            if (intermediateSent && text.startsWith(intermediateSent)) {
+                                pending = text.slice(intermediateSent.length).trim()
+                            }
+                            intermediateSent = text
+                            if (!pending) return
+                            // 中间插话统一走语义分段发送，符合真人逐段节发习惯
+                            try {
+                                await sendSegmentedMessage(event, pending, {
+                                    quote: true,
+                                    shortLimit: 100,
+                                    foldLimit: 800
+                                })
+                            } catch (err) {
+                                logger.debug('[ChatService] 中间消息分段发送失败:', err.message)
+                            }
+                        } else if (data?.type === 'text' && data.text) {
+                            await event.reply(data.text, true)
+                        }
+                    })
                 }
 
-                // Key切换独立预算：Key切换不累加 retryCount，仅靠已试集合与该预算共同终止，
-                // 否则多Key渠道会在Key之间反复循环，每次循环都是一次真实计费调用
-                const maxKeySwitches = Math.max(2, maxRetries * 2)
+                // 初始客户端的回调也由委托器生命周期统一接管（通过 onClientBuilt）
+                attachIntermediateCallback(client)
 
-                /**
-                 * 记录某渠道在本次请求中已尝试过的Key索引
-                 * @param {string} channelId - 渠道ID
-                 * @param {number} keyIndex - Key索引
-                 * @returns {void}
-                 */
-                const markKeyTried = (channelId, keyIndex) => {
-                    if (!channelId || !(keyIndex >= 0)) return
-                    let tried = retryStats.keysTriedPerChannel.get(channelId)
-                    if (!tried) {
-                        tried = new Set()
-                        retryStats.keysTriedPerChannel.set(channelId, tried)
-                    }
-                    tried.add(keyIndex)
-                }
+                const delegateResult = await delegateRequest({
+                    userMessage,
+                    initialChannel: channel,
+                    initialClient: client,
+                    initialModel: llmModel,
+                    clientBaseOptions: clientOptions,
+                    requestOptions,
+                    resolveChannelPrompt,
+                    resolveThinkingOptions,
+                    resolveToolChoiceForChannel,
+                    onClientBuilt: attachIntermediateCallback,
+                    event,
+                    source
+                })
+                const {
+                    response: delegateResponse = null,
+                    usage: delegateUsage = null,
+                    reportedModel: delegateUpstreamModel = null,
+                    toolCallLogs: delegateToolLogs = [],
+                    usedModel: delegateUsedModel = llmModel,
+                    usedChannel: delegateUsedChannel = channel,
+                    fallbackUsed: delegateFallbackUsed = false,
+                    channelSwitched: delegateChannelSwitched = false,
+                    totalRetryCount: delegateTotalRetryCount = 0,
+                    switchChain: delegateSwitchChain = [],
+                    retryStats: delegateRetryStats = null,
+                    lastError: delegateLastError = null
+                } = delegateResult
 
-                /**
-                 * 获取某渠道本次请求已尝试过的Key索引集合
-                 * @param {string} channelId - 渠道ID
-                 * @returns {Set<number>|null} 已尝试集合
-                 */
-                const getTriedKeys = channelId => retryStats.keysTriedPerChannel.get(channelId) || null
+                // 同步外部追踪变量（统计记录用）
+                actualUsedModel = delegateUsedModel
+                actualUsedChannel = delegateUsedChannel
+                actualFallbackUsed = delegateFallbackUsed
+                actualChannelSwitched = delegateChannelSwitched
+                actualTotalRetryCount = delegateTotalRetryCount
+                actualSwitchChain = delegateSwitchChain
 
-                for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
-                    const currentModel = modelsToTry[modelIndex]
-                    const isMainModel = modelIndex === 0
-                    let retryCount = 0
-                    let emptyRetryCount = 0
-                    let currentClient = client
-                    let currentChannel = isMainModel ? channel : null
-                    // 渠道连续失败计数（请求抛错或空返回都计入），达到渠道级 retry.maxAttempts 后优先切换渠道
-                    const channelFailStreak = new Map()
+                let response = delegateResponse
+                finalUsage = delegateUsage
+                allToolLogs = delegateToolLogs
+                upstreamReportedModel = delegateUpstreamModel
+                lastError = delegateLastError
+                const switchChain = delegateSwitchChain
+                const retryStats = delegateRetryStats
 
-                    // 备选模型：只有在主模型的所有渠道都已耗尽后才使用
-                    if (!isMainModel) {
-                        // 检查是否应该使用备选模型
-                        if (!retryStats.mainModelExhausted) {
-                            logger.debug(`[ChatService] 主模型渠道未耗尽，跳过备选模型 ${currentModel}`)
-                            continue
-                        }
-
-                        currentChannel = channelManager.getBestChannel(currentModel)
-                        if (!currentChannel) {
-                            logger.warn(`[ChatService] 备选模型 ${currentModel} 无可用渠道，跳过`)
-                            continue
-                        }
-
-                        const keyInfo = channelManager.getChannelKey(currentChannel)
-                        currentKeyIndex = keyInfo.keyIndex
-                        const fallbackClientOptions = {
-                            ...clientOptions,
-                            adapterType: currentChannel.adapterType,
-                            baseUrl: currentChannel.baseUrl,
-                            apiKey: keyInfo.key,
-                            keyIndex: keyInfo.keyIndex,
-                            imageConfig: currentChannel.imageConfig || clientOptions.imageConfig,
-                            timeout: currentChannel.timeout || clientOptions.timeout,
-                            chatPath: currentChannel.chatPath || '',
-                            modelsPath: currentChannel.modelsPath || '',
-                            responsePath: currentChannel.responsePath || currentChannel.endpoints?.responses || '',
-                            endpoints: currentChannel.endpoints || {},
-                            apiInterface: currentChannel.apiInterface || currentChannel.openaiApiInterface || 'chat',
-                            openaiApiInterface:
-                                currentChannel.apiInterface || currentChannel.openaiApiInterface || 'chat',
-                            experimental: currentChannel.experimental || {},
-                            openaiResponses: currentChannel.openaiResponses || {},
-                            customHeaders: currentChannel.customHeaders || {},
-                            headersTemplate: currentChannel.headersTemplate || '',
-                            requestBodyTemplate: currentChannel.requestBodyTemplate || '',
-                            systemPromptConfig: currentChannel.systemPromptConfig || null,
-                            ...resolveThinkingOptions(currentChannel),
-                            toolChoice: resolveToolChoiceForChannel(currentChannel)
-                        }
-                        currentClient = await LlmService.createClient(fallbackClientOptions)
-
-                        // 记录开始使用备选模型
-                        switchChain.push({
-                            type: 'fallback',
-                            model: currentModel,
-                            channel: currentChannel.name,
-                            reason: 'main_model_exhausted'
-                        })
-                        logger.info(`[ChatService] 主模型所有渠道已耗尽，切换到备选模型: ${currentModel}`)
-                    }
-
-                    // 记录当前渠道
-                    if (currentChannel && isMainModel) {
-                        retryStats.channelsTriedForMainModel.add(currentChannel.id)
-                    }
-                    // 记录该渠道的起始Key，避免后续切换又转回来
-                    if (currentChannel) {
-                        markKeyTried(currentChannel.id, currentKeyIndex)
-                    }
-
-                    while (retryCount <= (isMainModel ? maxRetries : 1)) {
-                        retryStats.totalAttempts++
-                        try {
-                            // 应用模型映射 - 获取实际请求的模型名称
-                            const currentModelMapping = currentChannel
-                                ? channelManager.getActualModel(currentChannel.id, currentModel)
-                                : { actualModel: currentModel }
-                            const promptState = resolveChannelPrompt(currentChannel)
-                            const currentRequestOptions = {
-                                ...requestOptions,
-                                ...resolveThinkingOptions(currentChannel),
-                                model: currentModelMapping.actualModel,
-                                systemOverride: promptState.systemPrompt,
-                                systemPromptConfig: promptState.systemPromptConfig,
-                                toolChoice: resolveToolChoiceForChannel(currentChannel),
-                                // 渠道级提示词缓存键：同渠道复用同一键维持服务商 prompt 缓存前缀
-                                ...(currentChannel?.id
-                                    ? { promptCacheKey: PromptCacheService.getPromptCacheKey(currentChannel.id) }
-                                    : {})
-                            }
-                            response = await currentClient.sendMessage(userMessage, currentRequestOptions)
-                            if (response?.model) {
-                                upstreamReportedModel = response.model
-                            }
-
-                            const hasToolCallLogs = response?.toolCallLogs?.length > 0
-                            const hasContents = response?.contents?.length > 0
-                            const hasTextContent = response?.contents?.some(c => c.type === 'text' && c.text?.trim())
-                            const hasAnyContent = hasContents || hasToolCallLogs
-
-                            // 成功响应：有内容或有工具调用
-                            if (response && hasAnyContent) {
-                                // 检查是否为空文本响应（无工具调用且无文本）
-                                if (!hasToolCallLogs && !hasTextContent && emptyRetryCount < emptyRetries) {
-                                    // 空文本计入渠道连续失败（触发渠道级 retry.maxAttempts 强制切换）
-                                    if (currentChannel) {
-                                        channelFailStreak.set(
-                                            currentChannel.id,
-                                            (channelFailStreak.get(currentChannel.id) || 0) + 1
-                                        )
-                                    }
-                                    emptyRetryCount++
-                                    logger.warn(
-                                        `[ChatService] 模型 ${currentModel} 返回空文本，重试第${emptyRetryCount}次...`
-                                    )
-                                    const retryPolicy = pickChannelRetryPolicy(
-                                        currentChannel,
-                                        retryDelay,
-                                        fallbackBackoff
-                                    )
-                                    const delay = computeDelay(emptyRetryCount, {
-                                        backoff: retryPolicy.backoff,
-                                        baseDelay: retryPolicy.delay,
-                                        maxDelay: 10000,
-                                        jitterRatio: retryJitter
-                                    })
-                                    logger.debug(`[ChatService] 空文本退避 ${delay}ms (${retryPolicy.backoff})`)
-                                    await new Promise(r => setTimeout(r, delay))
-                                    continue
-                                }
-
-                                // 成功
-                                usedModel = currentRequestOptions.model
-                                usedChannel = currentChannel
-                                if (!isMainModel) {
-                                    fallbackUsed = true
-                                    logger.info(`[ChatService] 使用备选模型成功: ${currentModel}`)
-                                    if (notifyOnFallback && event?.reply) {
-                                        try {
-                                            await event.reply(`[已切换至备选模型: ${currentModel}]`, false)
-                                        } catch {}
-                                    }
-                                }
-                                // 成功后重置渠道错误计数
-                                if (currentChannel) {
-                                    channelManager.resetChannelError(currentChannel.id)
-                                    // 原渠道成功（含原地重试成功），重置该渠道连续失败计数
-                                    channelFailStreak.delete(currentChannel.id)
-                                }
-                                // 同步追踪变量用于统计记录
-                                syncTrackingVars()
-                                break
-                            }
-
-                            // 空响应处理
-                            // 空返回计入渠道连续失败（触发渠道级 retry.maxAttempts 强制切换）
-                            if (currentChannel) {
-                                channelFailStreak.set(
-                                    currentChannel.id,
-                                    (channelFailStreak.get(currentChannel.id) || 0) + 1
-                                )
-                            }
-                            emptyRetryCount++
-                            if (emptyRetryCount <= emptyRetries) {
-                                logger.warn(
-                                    `[ChatService] 模型 ${currentModel} 返回空响应，重试第${emptyRetryCount}次...`
-                                )
-                                const retryPolicy = pickChannelRetryPolicy(currentChannel, retryDelay, fallbackBackoff)
-                                const delay = computeDelay(emptyRetryCount, {
-                                    backoff: retryPolicy.backoff,
-                                    baseDelay: retryPolicy.delay,
-                                    maxDelay: 10000,
-                                    jitterRatio: retryJitter
-                                })
-                                logger.debug(`[ChatService] 空响应退避 ${delay}ms (${retryPolicy.backoff})`)
-                                await new Promise(r => setTimeout(r, delay))
-                                continue
-                            }
-
-                            // 空响应重试耗尽，尝试切换Key
-                            let switched = false
-                            if (
-                                enableKeyRotation &&
-                                currentChannel &&
-                                currentKeyIndex >= 0 &&
-                                retryStats.keySwitchCount < maxKeySwitches
-                            ) {
-                                const nextKey = channelManager.getNextAvailableKey(
-                                    currentChannel.id,
-                                    currentKeyIndex,
-                                    getTriedKeys(currentChannel.id)
-                                )
-                                if (nextKey) {
-                                    logger.info(
-                                        `[ChatService] 空响应后切换Key: ${currentChannel.name} Key#${currentKeyIndex + 1} -> Key#${nextKey.keyIndex + 1}`
-                                    )
-                                    switchChain.push({
-                                        type: 'key',
-                                        channel: currentChannel.name,
-                                        fromKey: currentKeyIndex + 1,
-                                        toKey: nextKey.keyIndex + 1,
-                                        reason: 'empty'
-                                    })
-                                    retryStats.keySwitchCount++
-                                    currentKeyIndex = nextKey.keyIndex
-                                    markKeyTried(currentChannel.id, currentKeyIndex)
-                                    const newClientOptions = {
-                                        ...clientOptions,
-                                        apiKey: nextKey.key,
-                                        keyIndex: nextKey.keyIndex,
-                                        customHeaders:
-                                            currentChannel?.customHeaders || clientOptions.customHeaders || {},
-                                        headersTemplate: currentChannel?.headersTemplate || '',
-                                        requestBodyTemplate: currentChannel?.requestBodyTemplate || '',
-                                        systemPromptConfig: currentChannel?.systemPromptConfig || null,
-                                        toolChoice: resolveToolChoiceForChannel(currentChannel)
-                                    }
-                                    currentClient = await LlmService.createClient(newClientOptions)
-                                    emptyRetryCount = 0 // 重置空响应计数
-                                    switched = true
-                                    continue
-                                }
-                            }
-
-                            // 尝试切换渠道
-                            if (!switched && enableChannelSwitch && isMainModel) {
-                                // 排除已尝试的渠道
-                                const altChannels = channelManager
-                                    .getAvailableChannels(currentModel, {
-                                        excludeChannelId: currentChannel?.id
-                                    })
-                                    .filter(ch => !retryStats.channelsTriedForMainModel.has(ch.id))
-
-                                if (altChannels.length > 0) {
-                                    const altChannel = altChannels[0]
-                                    const altKeyInfo = channelManager.getChannelKey(altChannel)
-                                    logger.info(
-                                        `[ChatService] 空响应后切换渠道: ${currentChannel?.name} -> ${altChannel.name}`
-                                    )
-                                    switchChain.push({
-                                        type: 'channel',
-                                        from: currentChannel?.name,
-                                        to: altChannel.name,
-                                        reason: 'empty'
-                                    })
-                                    currentChannel = altChannel
-                                    currentKeyIndex = altKeyInfo.keyIndex
-                                    channelSwitched = true
-                                    // 记录已尝试的渠道及其起始Key
-                                    retryStats.channelsTriedForMainModel.add(altChannel.id)
-                                    markKeyTried(altChannel.id, currentKeyIndex)
-                                    const altClientOptions = {
-                                        ...clientOptions,
-                                        adapterType: altChannel.adapterType,
-                                        baseUrl: altChannel.baseUrl,
-                                        apiKey: altKeyInfo.key,
-                                        keyIndex: altKeyInfo.keyIndex,
-                                        imageConfig: altChannel.imageConfig || clientOptions.imageConfig,
-                                        timeout: altChannel.timeout || clientOptions.timeout,
-                                        chatPath: altChannel.chatPath || '',
-                                        modelsPath: altChannel.modelsPath || '',
-                                        responsePath: altChannel.responsePath || altChannel.endpoints?.responses || '',
-                                        endpoints: altChannel.endpoints || {},
-                                        apiInterface:
-                                            altChannel.apiInterface || altChannel.openaiApiInterface || 'chat',
-                                        openaiApiInterface:
-                                            altChannel.apiInterface || altChannel.openaiApiInterface || 'chat',
-                                        experimental: altChannel.experimental || {},
-                                        openaiResponses: altChannel.openaiResponses || {},
-                                        customHeaders: altChannel.customHeaders || {},
-                                        headersTemplate: altChannel.headersTemplate || '',
-                                        requestBodyTemplate: altChannel.requestBodyTemplate || '',
-                                        systemPromptConfig: altChannel.systemPromptConfig || null,
-                                        ...resolveThinkingOptions(altChannel),
-                                        toolChoice: resolveToolChoiceForChannel(altChannel)
-                                    }
-                                    currentClient = await LlmService.createClient(altClientOptions)
-                                    emptyRetryCount = 0
-                                    switched = true
-                                    continue
-                                }
-                            }
-
-                            // 重置空响应计数，给重试一个机会
-                            // 渠道级 retry.maxAttempts 接通：同渠道连续失败达到阈值时，优先切换 Key/渠道
-                            // （受 keySwitchCount/maxKeySwitches 与 channelsTriedForMainModel 约束防循环），无可切换才原地重试
-                            emptyRetryCount = 0
-
-                            const channelMaxAttempts = currentChannel?.retry?.maxAttempts ?? maxRetries
-                            const streak = currentChannel ? channelFailStreak.get(currentChannel.id) || 0 : 0
-                            if (currentChannel && streak >= channelMaxAttempts) {
-                                logger.warn(
-                                    `[ChatService] 渠道 ${currentChannel.name} 连续失败 ${streak} 次(阈值 ${channelMaxAttempts})，优先尝试切换`
-                                )
-                                if (
-                                    enableKeyRotation &&
-                                    currentKeyIndex >= 0 &&
-                                    retryStats.keySwitchCount < maxKeySwitches
-                                ) {
-                                    const nextKey = channelManager.getNextAvailableKey(
-                                        currentChannel.id,
-                                        currentKeyIndex,
-                                        getTriedKeys(currentChannel.id)
-                                    )
-                                    if (nextKey) {
-                                        logger.info(
-                                            `[ChatService] 渠道连续失败后切换Key: ${currentChannel.name} Key#${currentKeyIndex + 1} -> Key#${nextKey.keyIndex + 1}`
-                                        )
-                                        switchChain.push({
-                                            type: 'key',
-                                            channel: currentChannel.name,
-                                            fromKey: currentKeyIndex + 1,
-                                            toKey: nextKey.keyIndex + 1,
-                                            reason: 'empty'
-                                        })
-                                        retryStats.keySwitchCount++
-                                        currentKeyIndex = nextKey.keyIndex
-                                        markKeyTried(currentChannel.id, currentKeyIndex)
-                                        const newClientOptions = {
-                                            ...clientOptions,
-                                            apiKey: nextKey.key,
-                                            keyIndex: nextKey.keyIndex,
-                                            customHeaders:
-                                                currentChannel?.customHeaders || clientOptions.customHeaders || {},
-                                            headersTemplate: currentChannel?.headersTemplate || '',
-                                            requestBodyTemplate: currentChannel?.requestBodyTemplate || '',
-                                            systemPromptConfig: currentChannel?.systemPromptConfig || null,
-                                            toolChoice: resolveToolChoiceForChannel(currentChannel)
-                                        }
-                                        currentClient = await LlmService.createClient(newClientOptions)
-                                        // 切Key不重置渠道失败连续计数（渠道故障不只与Key相关）
-                                        switched = true
-                                        continue
-                                    }
-                                }
-                                if (!switched && enableChannelSwitch && isMainModel) {
-                                    const altChannels = channelManager
-                                        .getAvailableChannels(currentModel, {
-                                            excludeChannelId: currentChannel?.id
-                                        })
-                                        .filter(ch => !retryStats.channelsTriedForMainModel.has(ch.id))
-                                    if (altChannels.length > 0) {
-                                        const altChannel = altChannels[0]
-                                        const altKeyInfo = channelManager.getChannelKey(altChannel)
-                                        logger.info(
-                                            `[ChatService] 渠道连续失败后切换渠道: ${currentChannel?.name} -> ${altChannel.name}`
-                                        )
-                                        switchChain.push({
-                                            type: 'channel',
-                                            from: currentChannel?.name,
-                                            to: altChannel.name,
-                                            reason: 'empty'
-                                        })
-                                        currentChannel = altChannel
-                                        currentKeyIndex = altKeyInfo.keyIndex
-                                        channelSwitched = true
-                                        retryStats.channelsTriedForMainModel.add(altChannel.id)
-                                        markKeyTried(altChannel.id, currentKeyIndex)
-                                        const altClientOptions = {
-                                            ...clientOptions,
-                                            adapterType: altChannel.adapterType,
-                                            baseUrl: altChannel.baseUrl,
-                                            apiKey: altKeyInfo.key,
-                                            keyIndex: altKeyInfo.keyIndex,
-                                            imageConfig: altChannel.imageConfig || clientOptions.imageConfig,
-                                            timeout: altChannel.timeout || clientOptions.timeout,
-                                            chatPath: altChannel.chatPath || '',
-                                            modelsPath: altChannel.modelsPath || '',
-                                            responsePath:
-                                                altChannel.responsePath || altChannel.endpoints?.responses || '',
-                                            endpoints: altChannel.endpoints || {},
-                                            apiInterface:
-                                                altChannel.apiInterface || altChannel.openaiApiInterface || 'chat',
-                                            openaiApiInterface:
-                                                altChannel.apiInterface || altChannel.openaiApiInterface || 'chat',
-                                            experimental: altChannel.experimental || {},
-                                            openaiResponses: altChannel.openaiResponses || {},
-                                            customHeaders: altChannel.customHeaders || {},
-                                            headersTemplate: altChannel.headersTemplate || '',
-                                            requestBodyTemplate: altChannel.requestBodyTemplate || '',
-                                            systemPromptConfig: altChannel.systemPromptConfig || null,
-                                            ...resolveThinkingOptions(altChannel),
-                                            toolChoice: resolveToolChoiceForChannel(altChannel)
-                                        }
-                                        currentClient = await LlmService.createClient(altClientOptions)
-                                        // 切换渠道成功，重置新渠道的连续失败计数
-                                        channelFailStreak.delete(altChannel.id)
-                                        switched = true
-                                        continue
-                                    }
-                                }
-                            }
-
-                            // 无法切换Key或渠道，但有剩余请求预算时，原地重试（单渠道单Key场景）
-                            retryCount++
-                            totalRetryCount++
-                            if (retryCount <= (isMainModel ? maxRetries : 1)) {
-                                logger.info(
-                                    `[ChatService] 空响应，无可切换选项，延迟后重试 (${retryCount}/${maxRetries})`
-                                )
-                                switchChain.push({
-                                    type: 'retry',
-                                    channel: currentChannel?.name,
-                                    reason: 'empty',
-                                    attempt: retryCount
-                                })
-                                const retryPolicy = pickChannelRetryPolicy(currentChannel, retryDelay, fallbackBackoff)
-                                const delay = computeDelay(retryCount, {
-                                    backoff: retryPolicy.backoff,
-                                    baseDelay: retryPolicy.delay,
-                                    maxDelay: 10000,
-                                    jitterRatio: retryJitter
-                                })
-                                logger.debug(`[ChatService] 空响应原地重试退避 ${delay}ms (${retryPolicy.backoff})`)
-                                switchChain[switchChain.length - 1].delay = delay
-                                await new Promise(r => setTimeout(r, delay))
-                                emptyRetryCount = 0 // 重置空响应计数，给重试一个机会
-                                continue
-                            }
-
-                            // 重试次数耗尽，进入下一个模型
-                            break
-                        } catch (modelError) {
-                            lastError = modelError
-                            const errorMsg = modelError.message || ''
-                            // 分析错误类型（与 BackoffPolicy 统一口径；403 不归 auth，client/unknown 不触发切换）
-                            const errorType = classifyRetryError(modelError).type
-
-                            logger.error(`[ChatService] 模型 ${currentModel} 请求失败 (${errorType}): ${errorMsg}`)
-                            // 请求抛错计入渠道连续失败（触发渠道级 retry.maxAttempts 强制切换）
-                            if (currentChannel) {
-                                channelFailStreak.set(
-                                    currentChannel.id,
-                                    (channelFailStreak.get(currentChannel.id) || 0) + 1
-                                )
-                            }
-
-                            // 报告渠道错误
-                            // 单次用户请求内，同一渠道只累加一次渠道级 errorCount，
-                            // 否则重试会把 errorCount 推到阈值使渠道被整体标记 ERROR，误伤所有用户
-                            if (currentChannel) {
-                                const alreadyReported = retryStats.channelsErrorReported.has(currentChannel.id)
-                                retryStats.channelsErrorReported.add(currentChannel.id)
-                                await channelManager.reportError(currentChannel.id, {
-                                    keyIndex: currentKeyIndex,
-                                    errorType,
-                                    errorMessage: errorMsg,
-                                    isRetry: alreadyReported
-                                })
-                            }
-
-                            // 判断是否应该尝试切换（空/认证、配额、超时、网络、服务器错误都应该尝试切换）
-                            const shouldTrySwitch = expectRetryable(errorType)
-                            let errorSwitched = false
-
-                            // 尝试切换Key（认证错误优先切换Key）
-                            if (
-                                shouldTrySwitch &&
-                                enableKeyRotation &&
-                                currentChannel &&
-                                currentKeyIndex >= 0 &&
-                                retryStats.keySwitchCount < maxKeySwitches
-                            ) {
-                                const nextKey = channelManager.getNextAvailableKey(
-                                    currentChannel.id,
-                                    currentKeyIndex,
-                                    getTriedKeys(currentChannel.id)
-                                )
-                                if (nextKey) {
-                                    logger.info(
-                                        `[ChatService] ${errorType}错误后切换Key: ${currentChannel.name} Key#${currentKeyIndex + 1} -> Key#${nextKey.keyIndex + 1}`
-                                    )
-                                    switchChain.push({
-                                        type: 'key',
-                                        channel: currentChannel.name,
-                                        fromKey: currentKeyIndex + 1,
-                                        toKey: nextKey.keyIndex + 1,
-                                        reason: errorType
-                                    })
-                                    retryStats.keySwitchCount++
-                                    currentKeyIndex = nextKey.keyIndex
-                                    markKeyTried(currentChannel.id, currentKeyIndex)
-                                    const newClientOptions = {
-                                        ...clientOptions,
-                                        apiKey: nextKey.key,
-                                        keyIndex: nextKey.keyIndex,
-                                        customHeaders:
-                                            currentChannel?.customHeaders || clientOptions.customHeaders || {},
-                                        headersTemplate: currentChannel?.headersTemplate || '',
-                                        requestBodyTemplate: currentChannel?.requestBodyTemplate || '',
-                                        systemPromptConfig: currentChannel?.systemPromptConfig || null,
-                                        toolChoice: resolveToolChoiceForChannel(currentChannel)
-                                    }
-                                    currentClient = await LlmService.createClient(newClientOptions)
-                                    errorSwitched = true
-                                    continue // 不增加retryCount，直接重试
-                                }
-                            }
-
-                            // Key切换失败，尝试切换渠道
-                            if (!errorSwitched && shouldTrySwitch && enableChannelSwitch && isMainModel) {
-                                // 排除已尝试的渠道
-                                const altChannels = channelManager
-                                    .getAvailableChannels(currentModel, {
-                                        excludeChannelId: currentChannel?.id
-                                    })
-                                    .filter(ch => !retryStats.channelsTriedForMainModel.has(ch.id))
-
-                                if (altChannels.length > 0) {
-                                    const altChannel = altChannels[0]
-                                    const altKeyInfo = channelManager.getChannelKey(altChannel)
-                                    logger.info(
-                                        `[ChatService] ${errorType}错误后切换渠道: ${currentChannel?.name} -> ${altChannel.name}`
-                                    )
-                                    switchChain.push({
-                                        type: 'channel',
-                                        from: currentChannel?.name,
-                                        to: altChannel.name,
-                                        reason: errorType
-                                    })
-                                    currentChannel = altChannel
-                                    currentKeyIndex = altKeyInfo.keyIndex
-                                    channelSwitched = true
-                                    // 记录已尝试的渠道及其起始Key
-                                    retryStats.channelsTriedForMainModel.add(altChannel.id)
-                                    markKeyTried(altChannel.id, currentKeyIndex)
-                                    const altClientOptions = {
-                                        ...clientOptions,
-                                        adapterType: altChannel.adapterType,
-                                        baseUrl: altChannel.baseUrl,
-                                        apiKey: altKeyInfo.key,
-                                        keyIndex: altKeyInfo.keyIndex,
-                                        imageConfig: altChannel.imageConfig || clientOptions.imageConfig,
-                                        timeout: altChannel.timeout || clientOptions.timeout,
-                                        chatPath: altChannel.chatPath || '',
-                                        modelsPath: altChannel.modelsPath || '',
-                                        responsePath: altChannel.responsePath || altChannel.endpoints?.responses || '',
-                                        endpoints: altChannel.endpoints || {},
-                                        apiInterface:
-                                            altChannel.apiInterface || altChannel.openaiApiInterface || 'chat',
-                                        openaiApiInterface:
-                                            altChannel.apiInterface || altChannel.openaiApiInterface || 'chat',
-                                        experimental: altChannel.experimental || {},
-                                        openaiResponses: altChannel.openaiResponses || {},
-                                        customHeaders: altChannel.customHeaders || {},
-                                        headersTemplate: altChannel.headersTemplate || '',
-                                        requestBodyTemplate: altChannel.requestBodyTemplate || '',
-                                        systemPromptConfig: altChannel.systemPromptConfig || null,
-                                        ...resolveThinkingOptions(altChannel),
-                                        toolChoice: resolveToolChoiceForChannel(altChannel)
-                                    }
-                                    currentClient = await LlmService.createClient(altClientOptions)
-                                    errorSwitched = true
-                                    // 切换渠道成功，重置新渠道的连续失败计数
-                                    channelFailStreak.delete(altChannel.id)
-                                    continue
-                                }
-                            }
-
-                            // 无法切换Key或渠道，使用普通重试（单渠道单Key场景）
-                            retryCount++
-                            totalRetryCount++
-
-                            // 记录错误信息到重试统计
-                            retryStats.errors.push({
-                                model: currentModel,
-                                channel: currentChannel?.name,
-                                errorType,
-                                errorMessage: errorMsg,
-                                attempt: retryCount
-                            })
-
-                            if (retryCount <= (isMainModel ? maxRetries : 1)) {
-                                // 渠道级 retry.delay/backoff 退避（ChannelManager 确保 retry 字段存在），带抖动
-                                const retryPolicy = pickChannelRetryPolicy(currentChannel, retryDelay, fallbackBackoff)
-                                const delay = computeDelay(retryCount, {
-                                    backoff: retryPolicy.backoff,
-                                    baseDelay: retryPolicy.delay,
-                                    maxDelay: 10000,
-                                    jitterRatio: retryJitter
-                                })
-                                logger.info(
-                                    `[ChatService] 无可切换选项，${delay}ms后重试 (${retryCount}/${maxRetries}, ${retryPolicy.backoff})`
-                                )
-                                switchChain.push({
-                                    type: 'retry',
-                                    channel: currentChannel?.name,
-                                    reason: errorType,
-                                    attempt: retryCount,
-                                    delay
-                                })
-                                await new Promise(r => setTimeout(r, delay))
-                            }
-                        }
-                    }
-
-                    // 主模型循环结束后，检查是否所有渠道都已尝试
-                    if (isMainModel && !response) {
-                        // 获取主模型所有可用渠道
-                        const allChannelsForMainModel = channelManager.getAvailableChannels(currentModel) || []
-                        const triedAllChannels = allChannelsForMainModel.every(ch =>
-                            retryStats.channelsTriedForMainModel.has(ch.id)
-                        )
-
-                        if (triedAllChannels || allChannelsForMainModel.length === 0) {
-                            retryStats.mainModelExhausted = true
-                            logger.info(
-                                `[ChatService] 主模型 ${currentModel} 所有渠道已耗尽 (尝试了 ${retryStats.channelsTriedForMainModel.size} 个渠道)`
-                            )
-                            switchChain.push({
-                                type: 'exhausted',
-                                model: currentModel,
-                                channelsTried: retryStats.channelsTriedForMainModel.size,
-                                totalChannels: allChannelsForMainModel.length
-                            })
-                        }
-                    }
-
-                    // 如果成功获取响应，退出模型循环
-                    if (response && (response.contents?.length > 0 || response.toolCallLogs?.length > 0)) {
-                        break
-                    }
-                    if (!fallbackEnabled || modelIndex >= modelsToTry.length - 1) {
-                        break
-                    }
-
-                    logger.info(`[ChatService] 尝试备选模型: ${modelsToTry[modelIndex + 1]}`)
-                }
                 if (!response && lastError) {
-                    // 同步追踪变量用于统计记录（即使失败也要记录）
-                    syncTrackingVars()
                     if (debugInfo) {
-                        debugInfo.totalRetryCount = totalRetryCount
+                        debugInfo.totalRetryCount = actualTotalRetryCount
                         debugInfo.switchChain = switchChain.length > 1 ? switchChain : null
-                        debugInfo.channelSwitched = channelSwitched
+                        debugInfo.channelSwitched = actualChannelSwitched
                     }
                     throw lastError
                 }
 
                 if (!response) {
                     logger.warn('[ChatService] 所有模型和渠道尝试后仍无有效响应')
-                    // 同步追踪变量（无响应但也无错误的情况）
-                    syncTrackingVars()
                 }
 
                 finalResponse = response?.contents || []
                 finalUsage = response?.usage || {}
                 allToolLogs = response?.toolCallLogs || []
                 // 提示词缓存命中感知：根据上游 usage 判定命中断言并轮换缓存键
-                const cacheVerdict = PromptCacheService.noteUsage(usedChannel?.id, finalUsage)
+                const cacheVerdict = PromptCacheService.noteUsage(actualUsedChannel?.id, finalUsage)
                 if (cacheVerdict !== 'none' && cacheVerdict !== 'hit') {
-                    logger.debug(`[ChatService] 提示词缓存判定: ${cacheVerdict} (channel=${usedChannel?.id})`)
+                    logger.debug(`[ChatService] 提示词缓存判定: ${cacheVerdict} (channel=${actualUsedChannel?.id})`)
                 }
                 if (finalResponse.length > 0) {
                     const personalTagChanges = []
@@ -1947,16 +1283,16 @@ export class ChatService {
 
                 // 记录实际使用的模型和渠道切换信息
                 if (debugInfo) {
-                    debugInfo.usedModel = usedModel
-                    debugInfo.fallbackUsed = fallbackUsed
-                    debugInfo.channelSwitched = channelSwitched
-                    debugInfo.usedChannel = usedChannel
+                    debugInfo.usedModel = actualUsedModel
+                    debugInfo.fallbackUsed = actualFallbackUsed
+                    debugInfo.channelSwitched = actualChannelSwitched
+                    debugInfo.usedChannel = actualUsedChannel
                         ? {
-                              id: usedChannel.id,
-                              name: usedChannel.name
+                              id: actualUsedChannel.id,
+                              name: actualUsedChannel.name
                           }
                         : null
-                    debugInfo.totalRetryCount = totalRetryCount
+                    debugInfo.totalRetryCount = actualTotalRetryCount
                     // 格式化switchChain为可读字符串数组
                     const formattedChain = switchChain.map(s => {
                         if (s.type === 'init') return `初始: ${s.channel}`
@@ -1966,6 +1302,7 @@ export class ChatService {
                         if (s.type === 'fallback') return `备选模型: ${s.model} @ ${s.channel} (${s.reason})`
                         if (s.type === 'exhausted')
                             return `渠道耗尽: ${s.model} (${s.channelsTried}/${s.totalChannels})`
+                        if (s.type === 'success') return `成功: ${s.channel} @ ${s.model}`
                         return JSON.stringify(s)
                     })
                     debugInfo.switchChain = formattedChain.length > 1 ? formattedChain : null
@@ -1973,10 +1310,10 @@ export class ChatService {
 
                     // 添加详细的重试统计信息
                     debugInfo.retryStats = {
-                        totalAttempts: retryStats.totalAttempts,
-                        channelsTriedCount: retryStats.channelsTriedForMainModel.size,
-                        mainModelExhausted: retryStats.mainModelExhausted,
-                        errors: retryStats.errors.slice(-5) // 只保留最近5个错误
+                        totalAttempts: retryStats?.totalAttempts ?? 0,
+                        channelsTriedCount: retryStats?.channelsTriedForMainModel.size ?? 0,
+                        mainModelExhausted: retryStats?.mainModelExhausted ?? false,
+                        errors: retryStats?.errors.slice(-5) ?? [] // 只保留最近5个错误
                     }
                 }
             }
@@ -2008,12 +1345,14 @@ export class ChatService {
                 }))
             }
         } finally {
+            // 委托器已统一 startRequest/endRequest；此处仅补充渠道使用统计
             if (channel) {
-                channelManager.endRequest(channel.id)
-                if (finalUsage) channelManager.reportUsage(channel.id, finalUsage?.totalTokens || 0)
+                if (finalUsage) {
+                    channelManager.reportUsage(actualUsedChannel?.id || channel.id, finalUsage?.totalTokens || 0)
+                }
                 // 成功时重置渠道错误计数
                 if (finalResponse?.length > 0) {
-                    channelManager.reportSuccess(channel.id)
+                    channelManager.reportSuccess(actualUsedChannel?.id || channel.id)
                 }
             }
 
@@ -2205,6 +1544,10 @@ export class ChatService {
     async *streamMessage(options) {
         const response = await this.sendMessage(options)
         yield* response.response
+        // sendMessage 成功但响应体为空时生成器会静默结束，此处留痕避免调用方无感知
+        if (!response.response || response.response.length === 0) {
+            logger.warn('[ChatService] streamMessage 收到空响应')
+        }
     }
 
     async getHistory(userId, _limit = 20, groupId = null) {

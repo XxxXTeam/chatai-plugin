@@ -1,5 +1,6 @@
 import express from 'express'
 import { channelManager, normalizeBaseUrl } from '../llm/ChannelManager.js'
+import { delegateRequest } from '../llm/LlmDelegator.js'
 import { statsService } from '../stats/StatsService.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
@@ -35,48 +36,6 @@ function getAdapterClientClass(adapterType = 'openai') {
         default:
             return import('../../core/adapters/index.js').then(m => m.OpenAIClient)
     }
-}
-
-async function createChannelTestClient({ adapterType, apiKey, baseUrl, channel = {}, overrides = {} }) {
-    const ClientClass = await getAdapterClientClass(adapterType)
-    const thinkingOptions = resolveThinkingOptions({ channel })
-    return new ClientClass({
-        apiKey,
-        baseUrl,
-        chatPath: overrides.chatPath ?? channel.chatPath ?? '',
-        modelsPath: overrides.modelsPath ?? channel.modelsPath ?? '',
-        responsePath: overrides.responsePath ?? channel.responsePath ?? channel.endpoints?.responses ?? '',
-        endpoints: overrides.endpoints ?? channel.endpoints ?? {},
-        apiInterface:
-            overrides.apiInterface ??
-            overrides.openaiApiInterface ??
-            channel.apiInterface ??
-            channel.openaiApiInterface ??
-            'chat',
-        openaiApiInterface:
-            overrides.apiInterface ??
-            overrides.openaiApiInterface ??
-            channel.apiInterface ??
-            channel.openaiApiInterface ??
-            'chat',
-        experimental: overrides.experimental ?? channel.experimental ?? {},
-        openaiResponses: overrides.openaiResponses ?? channel.openaiResponses ?? {},
-        customHeaders: channel.customHeaders || {},
-        headersTemplate: channel.headersTemplate || '',
-        requestBodyTemplate: channel.requestBodyTemplate || '',
-        systemPromptConfig: channel.systemPromptConfig || null,
-        imageConfig: channel.imageConfig || {},
-        enableReasoning: thinkingOptions.enableReasoning,
-        reasoningEffort: thinkingOptions.reasoningEffort,
-        thinkingVendorControl: thinkingOptions.thinkingVendorControl,
-        ...(thinkingOptions.reasoningBudgetTokens !== undefined
-            ? { reasoningBudgetTokens: thinkingOptions.reasoningBudgetTokens }
-            : {}),
-        channelId: channel.id,
-        channelName: channel.name,
-        features: ['chat'],
-        tools: []
-    })
 }
 
 // GET /api/channels/list
@@ -244,28 +203,6 @@ router.post('/test', async (req, res) => {
         }
 
         const channel = id ? channelManager.get(id) || {} : {}
-        const client = await createChannelTestClient({
-            adapterType,
-            apiKey: apiKey || (adapterType === 'openai' ? config.get('openai.apiKey') : ''),
-            baseUrl: baseUrl || (adapterType === 'openai' ? config.get('openai.baseUrl') : ''),
-            channel: {
-                ...channel,
-                customHeaders,
-                headersTemplate,
-                requestBodyTemplate,
-                imageConfig,
-                systemPromptConfig
-            },
-            overrides: {
-                chatPath,
-                responsePath,
-                endpoints: endpoints || {},
-                apiInterface: apiInterface || openaiApiInterface || 'chat',
-                openaiApiInterface: apiInterface || openaiApiInterface || 'chat',
-                experimental: experimental || {},
-                openaiResponses: openaiResponses || {}
-            }
-        })
 
         /*
          * 渠道未配置 models 时的健康检查兜底模型。
@@ -287,7 +224,6 @@ router.post('/test', async (req, res) => {
                 chatLogger.info(`[渠道测试] 模型重定向: ${testModel} -> ${actualTestModel}`)
             }
         }
-        const useStreaming = advanced?.streaming?.enabled || false
         const maxTokens = advanced?.llm?.maxTokens || 100
         const thinkingOptions = resolveThinkingOptions({ channel: { advanced } })
 
@@ -317,38 +253,31 @@ router.post('/test', async (req, res) => {
         let apiUsage = null
         let reportedModel = null
 
-        if (useStreaming) {
-            const stream = await client.streamMessage(
-                [{ role: 'user', content: [{ type: 'text', text: testMessage }] }],
-                options
-            )
-            for await (const chunk of stream) {
-                if (typeof chunk === 'string') {
-                    replyText += chunk
-                } else if (chunk.type === 'text') {
-                    replyText += chunk.text
-                } else if (chunk.type === 'usage' || chunk.usage) {
-                    apiUsage = chunk.usage || chunk
-                    reportedModel = chunk.model || reportedModel
-                } else if (chunk.model) {
-                    reportedModel = chunk.model
-                }
-            }
-        } else {
-            const response = await client.sendMessage(
-                { role: 'user', content: [{ type: 'text', text: testMessage }] },
-                options
-            )
-            if (!response || !response.contents || !Array.isArray(response.contents)) {
-                return res.status(500).json(ApiResponse.fail(null, '连接失败: API响应格式不正确'))
-            }
-            replyText = response.contents
-                .filter(c => c && c.type === 'text')
-                .map(c => c.text)
-                .join('')
-            apiUsage = response.usage
-            reportedModel = response.model || null
+        /*
+         * 渠道连通性测试经统一委托执行：锁定渠道只测指定渠道/当前 Key/指定模型。
+         * 委托器走 sendMessage（非流式），与"仅需最终文本"的测试语义一致；
+         * 流式逐块行为仅为前端进度展示所需，测试最终结果仍以完整回复文本为准。
+         */
+        const delegated = await delegateRequest({
+            userMessage: { role: 'user', content: [{ type: 'text', text: testMessage }] },
+            initialModel: actualTestModel,
+            initialChannel: id ? channel : null,
+            clientBaseOptions: {},
+            requestOptions: options,
+            event: null,
+            source: 'channel-test',
+            lockChannel: true
+        })
+        const response = delegated.response
+        if (!response || !response.contents || !Array.isArray(response.contents)) {
+            return res.status(500).json(ApiResponse.fail(null, '连接失败: API响应格式不正确'))
         }
+        replyText = response.contents
+            .filter(c => c && c.type === 'text')
+            .map(c => c.text)
+            .join('')
+        apiUsage = response.usage
+        reportedModel = response.model || null
 
         const elapsed = Date.now() - startTime
 
@@ -544,14 +473,11 @@ async function runBatchTest(req, res) {
             if (channel.apiKeys && channel.apiKeys.length > 0) {
                 keyInfo = channelManager.getChannelKey(channel, { recordUsage: false })
                 apiKey = keyInfo.key
+                // 认证 Key 已由 getChannelKey 准备：如实记录供失败响应使用
+                usedKeyIndex = keyInfo.keyIndex
+                usedKeyName = keyInfo.keyName
+                usedStrategy = keyInfo.strategy
             }
-
-            const client = await createChannelTestClient({
-                adapterType: channel.adapterType || 'openai',
-                apiKey,
-                baseUrl: channelManager.getCurrentBaseUrl(channel.id) || channel.baseUrl,
-                channel
-            })
 
             // 应用模型映射/重定向
             const mapping = channelManager.getActualModel(channelId, model)
@@ -565,9 +491,13 @@ async function runBatchTest(req, res) {
                 preset: null,
                 channel
             })
-            const response = await client.sendMessage(
-                { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
-                {
+            // 批量连通性测试经统一委托执行：锁定渠道只测指定渠道/当前 Key/指定模型
+            const delegated = await delegateRequest({
+                userMessage: { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
+                initialModel: model,
+                initialChannel: channel,
+                clientBaseOptions: {},
+                requestOptions: {
                     model: actualModel,
                     maxToken: 50,
                     temperature: batchTestTemperature,
@@ -582,8 +512,12 @@ async function runBatchTest(req, res) {
                     ...(thinkingOptions.reasoningBudgetTokens !== undefined
                         ? { reasoningBudgetTokens: thinkingOptions.reasoningBudgetTokens }
                         : {})
-                }
-            )
+                },
+                event: null,
+                source: 'channel-batch-test',
+                lockChannel: true
+            })
+            const response = delegated.response
 
             const elapsed = Date.now() - startTime
             const replyText =
@@ -661,14 +595,11 @@ router.post('/test-model', async (req, res) => {
         if (channel.apiKeys && channel.apiKeys.length > 0) {
             keyInfo = channelManager.getChannelKey(channel, { recordUsage: false })
             apiKey = keyInfo.key
+            // 认证 Key 已由 getChannelKey 准备：如实记录供失败响应使用
+            usedKeyIndex = keyInfo.keyIndex
+            usedKeyName = keyInfo.keyName
+            usedStrategy = keyInfo.strategy
         }
-
-        const client = await createChannelTestClient({
-            adapterType: channel.adapterType || 'openai',
-            apiKey,
-            baseUrl: channelManager.getCurrentBaseUrl(channel.id) || channel.baseUrl,
-            channel
-        })
 
         // 应用模型映射/重定向
         const mapping = channelManager.getActualModel(channelId, model)
@@ -685,9 +616,13 @@ router.post('/test-model', async (req, res) => {
             preset: null,
             channel
         })
-        const response = await client.sendMessage(
-            { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
-            {
+        // 单模型连通性测试经统一委托执行：锁定渠道只测指定渠道/当前 Key/指定模型
+        const delegated = await delegateRequest({
+            userMessage: { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
+            initialModel: model,
+            initialChannel: channel,
+            clientBaseOptions: {},
+            requestOptions: {
                 model: actualModel,
                 maxToken: 50,
                 temperature: singleTestTemperature,
@@ -702,8 +637,12 @@ router.post('/test-model', async (req, res) => {
                 ...(thinkingOptions.reasoningBudgetTokens !== undefined
                     ? { reasoningBudgetTokens: thinkingOptions.reasoningBudgetTokens }
                     : {})
-            }
-        )
+            },
+            event: null,
+            source: 'channel-single-test',
+            lockChannel: true
+        })
+        const response = delegated.response
 
         const elapsed = Date.now() - startTime
         const replyText =

@@ -103,10 +103,22 @@ export class GeminiClient extends AbstractClient {
      */
     buildGeminiRequestOptions(baseUrl) {
         const requestTimeout = this.resolveRequestTimeout()
-        if (!baseUrl && !requestTimeout) return undefined
+        const customHeaders = this.options?.customHeaders
+        const hasCustomHeaders = customHeaders && Object.keys(customHeaders).length > 0
+        /* 保留头白名单：SDK 内部先写死保留头（见 getHeaders），同名附加会叠加且可能损坏请求，故在交给 SDK 前剔除 */
+        const isGeminiReservedHeader = key =>
+            ['x-goog-api-key', 'x-goog-api-client'].some(reserved => key.toLowerCase().startsWith(reserved))
+        if (!baseUrl && !requestTimeout && !hasCustomHeaders) return undefined
         return {
             ...(baseUrl ? { baseUrl } : {}),
-            ...(requestTimeout ? { timeout: requestTimeout } : {})
+            ...(requestTimeout ? { timeout: requestTimeout } : {}),
+            ...(hasCustomHeaders
+                ? {
+                      customHeaders: Object.fromEntries(
+                          Object.entries(customHeaders).filter(([name]) => !isGeminiReservedHeader(name))
+                      )
+                  }
+                : {})
         }
     }
 
@@ -497,6 +509,7 @@ export class GeminiClient extends AbstractClient {
         const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
         // 支持自定义模型列表端点
         const customModelsPath = this.endpoints?.models || this.modelsPath
+        /* 硬编码仅作"无渠道配置直构造"的最后防御；委托器/渠道路径恒有 baseUrl，不会落到这里 */
         let baseUrl = this.baseUrl || 'https://generativelanguage.googleapis.com'
         let modelsEndpoint = '/v1beta/models'
 
@@ -552,6 +565,7 @@ export class GeminiClient extends AbstractClient {
         const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
         // 支持自定义模型信息端点
         const customModelsPath = this.endpoints?.models || this.modelsPath
+        /* 硬编码仅作"无渠道配置直构造"的最后防御；委托器/渠道路径恒有 baseUrl，不会落到这里 */
         let baseUrl = this.baseUrl || 'https://generativelanguage.googleapis.com'
         let modelInfoEndpoint = '/v1beta'
 

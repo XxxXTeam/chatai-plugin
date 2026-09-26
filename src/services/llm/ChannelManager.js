@@ -12,6 +12,7 @@ import { redisClient } from '../../core/cache/RedisClient.js'
 import { statsService } from '../stats/StatsService.js'
 import { normalizeAdvancedToolsConfig } from '../tools/ToolChoiceService.js'
 import { normalizeSystemPromptConfig } from './SystemPromptConfig.js'
+import { delegateRequest } from './LlmDelegator.js'
 
 /**
  * @constant {Object} DEFAULT_BASE_URLS
@@ -425,37 +426,6 @@ export class ChannelManager {
                 : this.selectBestBaseUrlIndex(channel)
 
         return baseUrls[selectedIndex] || baseUrls[0] || channel.baseUrl || ''
-    }
-
-    /**
-     * 切换到下一个可用的baseUrl（用于失败重试）
-     * @param {string} channelId - 渠道ID
-     * @param {number} currentIndex - 当前使用的baseUrl索引
-     * @returns {string|null} 下一个baseUrl，如果没有则返回null
-     */
-    switchToNextBaseUrl(channelId, currentIndex) {
-        const channel = this.channels.get(channelId)
-        if (!channel) return null
-
-        const baseUrls = channel.baseUrls || []
-        if (baseUrls.length <= 1) return null
-
-        // 尝试下一个baseUrl
-        const nextIndex = (currentIndex + 1) % baseUrls.length
-        if (nextIndex === currentIndex) return null // 已经循环一圈
-
-        channel.selectedBaseUrlIndex = nextIndex
-        channel.baseUrl = baseUrls[nextIndex]
-        logger.info(
-            `[ChannelManager] 渠道 ${channel.name} 切换到下一个baseUrl: ${baseUrls[nextIndex]} (索引: ${nextIndex})`
-        )
-
-        // 异步保存，不阻塞
-        this.saveToConfig().catch(err => {
-            logger.error(`[ChannelManager] 保存baseUrl切换失败: ${err.message}`)
-        })
-
-        return baseUrls[nextIndex]
     }
 
     /**
@@ -1277,10 +1247,18 @@ export class ChannelManager {
 
                 try {
                     const testStartTime = Date.now()
-                    const response = await client.sendMessage(
-                        { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
-                        { model: actualModel, maxToken: 20 }
-                    )
+                    // 健康检查经统一委托执行：锁定渠道，只测当前渠道/当前 Key，不切渠道不切模型
+                    const delegateResult = await delegateRequest({
+                        userMessage: { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
+                        initialModel: testModel,
+                        initialChannel: channel,
+                        initialClient: client,
+                        requestOptions: { model: actualModel, maxToken: 20 },
+                        event: null,
+                        source: 'channel-health-check',
+                        lockChannel: true
+                    })
+                    const response = delegateResult.response
 
                     const replyText =
                         response.contents
@@ -1365,10 +1343,26 @@ export class ChannelManager {
                 const actualModel = mapping.actualModel
 
                 const geminiStartTime = Date.now()
-                const response = await client.sendMessage(
-                    { role: 'user', content: [{ type: 'text', text: '你好' }] },
-                    { model: actualModel, maxToken: 20 }
-                )
+                /*
+                 * 与 OpenAI 分支不同，此处 401/Unauthorized 不回退 fetchModels：
+                 * Gemini 客户端的 listModels 失败时不抛错、返回内置模型列表兜底
+                 * （src/core/adapters/gemini/GeminiClient.js#listModels），Key 无效
+                 * 导致的 401 与模型接口正常退化的兜底结果无法区分，回退会把
+                 * 无效 Key 的渠道误置为 active。故聊天测试 401 时照旧抛错、
+                 * 由外层置渠道为 error。
+                 */
+                // 健康检查经统一委托执行：锁定渠道，只测当前渠道/当前 Key，不切渠道不切模型
+                const delegateResult = await delegateRequest({
+                    userMessage: { role: 'user', content: [{ type: 'text', text: '你好' }] },
+                    initialModel: testModel,
+                    initialChannel: channel,
+                    initialClient: client,
+                    requestOptions: { model: actualModel, maxToken: 20 },
+                    event: null,
+                    source: 'channel-health-check',
+                    lockChannel: true
+                })
+                const response = delegateResult.response
 
                 const replyText =
                     response.contents
@@ -1425,45 +1419,82 @@ export class ChannelManager {
                 const actualModel = mapping.actualModel
 
                 const claudeStartTime = Date.now()
-                const response = await client.sendMessage(
-                    { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
-                    { model: actualModel, maxToken: 20 }
-                )
-
-                const replyText =
-                    response.contents
-                        ?.filter(c => c.type === 'text')
-                        ?.map(c => c.text)
-                        ?.join('') || ''
-
-                // 记录统计
                 try {
-                    await statsService.recordApiCall({
-                        channelId: id,
-                        channelName: channel.name,
-                        model: testModel,
-                        reportedModel: response.model || null,
-                        duration: Date.now() - claudeStartTime,
-                        success: true,
-                        source: 'health_check',
-                        responseText: replyText,
-                        apiUsage: response.usage,
-                        request: { messages: [{ role: 'user', content: '说一声你好' }], model: testModel }
+                    // 健康检查经统一委托执行：锁定渠道，只测当前渠道/当前 Key，不切渠道不切模型
+                    const delegateResult = await delegateRequest({
+                        userMessage: { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
+                        initialModel: testModel,
+                        initialChannel: channel,
+                        initialClient: client,
+                        requestOptions: { model: actualModel, maxToken: 20 },
+                        event: null,
+                        source: 'channel-health-check',
+                        lockChannel: true
                     })
-                } catch (e) {
-                    /* 统计失败不影响主流程 */
-                }
+                    const response = delegateResult.response
 
-                channel.status = 'active'
-                channel.lastHealthCheck = Date.now()
-                channel.testedAt = Date.now()
-                this.channels.set(id, channel)
-                await this.saveToConfig() // 持久化状态
+                    const replyText =
+                        response.contents
+                            ?.filter(c => c.type === 'text')
+                            ?.map(c => c.text)
+                            ?.join('') || ''
 
-                return {
-                    success: true,
-                    message: replyText ? `连接成功！AI回复：${replyText}` : '连接成功！',
-                    testResponse: replyText
+                    // 记录统计
+                    try {
+                        await statsService.recordApiCall({
+                            channelId: id,
+                            channelName: channel.name,
+                            model: testModel,
+                            reportedModel: response.model || null,
+                            duration: Date.now() - claudeStartTime,
+                            success: true,
+                            source: 'health_check',
+                            responseText: replyText,
+                            apiUsage: response.usage,
+                            request: { messages: [{ role: 'user', content: '说一声你好' }], model: testModel }
+                        })
+                    } catch (e) {
+                        /* 统计失败不影响主流程 */
+                    }
+
+                    channel.status = 'active'
+                    channel.lastHealthCheck = Date.now()
+                    channel.testedAt = Date.now()
+                    this.channels.set(id, channel)
+                    await this.saveToConfig() // 持久化状态
+
+                    return {
+                        success: true,
+                        message: replyText ? `连接成功！AI回复：${replyText}` : '连接成功！',
+                        testResponse: replyText
+                    }
+                } catch (chatError) {
+                    // 与 OpenAI 分支同语义：401/Unauthorized 时回退模型列表验证 Key 是否有效。
+                    // Claude 客户端 listModels 失败时返回的是内置模型列表（非空），
+                    // 故「模型列表非空」只能作弱信号，仍按 OpenAI 语义置 active 并注明原因。
+                    if (chatError.message?.includes('401') || chatError.message?.includes('Unauthorized')) {
+                        try {
+                            const models = await this.fetchModels(id)
+                            if (models && models.length > 0) {
+                                channel.status = 'active'
+                                channel.lastHealthCheck = Date.now()
+                                channel.testedAt = Date.now()
+                                channel.errorCount = 0
+                                this.channels.set(id, channel)
+                                await this.saveToConfig() // 持久化状态
+
+                                return {
+                                    success: true,
+                                    message: `连接验证成功（通过模型列表）！可用模型数: ${models.length}`,
+                                    models: models.slice(0, 5),
+                                    note: '聊天测试返回401，但API Key有效。请确认使用正确的模型名称。'
+                                }
+                            }
+                        } catch (modelError) {
+                            logger.warn(`[ChannelManager] 获取模型列表也失败: ${modelError.message}`)
+                        }
+                    }
+                    throw chatError
                 }
             }
 
@@ -2021,229 +2052,6 @@ export class ChannelManager {
             if (typeof k === 'string') return true
             return k.enabled !== false && (k.errorCount || 0) < 10
         }).length
-    }
-
-    /**
-     * @param {string} model - 模型名称
-     * @param {Function} executor - 执行函数，接收 (channel, keyInfo) 返回 Promise
-     * @param {Object} options - 选项
-     * @param {number} options.maxRetries - 最大重试次数，默认3
-     * @param {number} options.retryDelay - 重试延迟(ms)，默认1000
-     * @param {boolean} options.switchChannel - 是否尝试切换渠道，默认true
-     * @param {boolean} options.switchKey - 是否尝试切换同渠道的Key，默认true
-     * @param {boolean} options.switchBaseUrl - 是否尝试切换baseUrl，默认true
-     * @returns {Promise<{success: boolean, result?: any, error?: string, attempts: number, channelsUsed: string[]}>}
-     */
-    async withRetry(model, executor, options = {}) {
-        const {
-            maxRetries = 3,
-            retryDelay = 1000,
-            switchChannel = true,
-            switchKey = true,
-            switchBaseUrl = true
-        } = options
-
-        let attempts = 0
-        let lastError = null
-        const channelsUsed = []
-        const triedChannels = new Set()
-        const triedBaseUrls = new Map() // channelId -> Set<baseUrlIndex>
-
-        // 获取初始渠道
-        let currentChannel = this.getBestChannel(model)
-        if (!currentChannel) {
-            return {
-                success: false,
-                error: `未找到支持模型 ${model} 的可用渠道`,
-                attempts: 0,
-                channelsUsed: []
-            }
-        }
-
-        // 获取当前使用的baseUrl索引
-        let currentBaseUrlIndex =
-            currentChannel.selectedBaseUrlIndex !== undefined
-                ? currentChannel.selectedBaseUrlIndex
-                : currentChannel.baseUrls?.length > 0
-                  ? 0
-                  : null
-
-        while (attempts < maxRetries) {
-            attempts++
-            channelsUsed.push(currentChannel.id)
-            triedChannels.add(currentChannel.id)
-
-            // 获取当前渠道的Key信息
-            const keyInfo = this.getChannelKey(currentChannel)
-
-            // 确保使用正确的baseUrl
-            if (currentChannel.baseUrls && currentChannel.baseUrls.length > 0) {
-                const currentBaseUrl = this.getCurrentBaseUrl(currentChannel.id)
-                if (currentBaseUrl !== currentChannel.baseUrl) {
-                    currentChannel.baseUrl = currentBaseUrl
-                }
-            }
-
-            try {
-                this.startRequest(currentChannel.id)
-
-                logger.debug(
-                    `[ChannelManager] 执行请求: 渠道=${currentChannel.name}, baseUrl=${currentChannel.baseUrl}, 尝试=${attempts}/${maxRetries}`
-                )
-
-                const result = await executor(currentChannel, keyInfo)
-
-                // 成功，报告并返回
-                this.reportSuccess(currentChannel.id)
-                this.endRequest(currentChannel.id)
-
-                return {
-                    success: true,
-                    result,
-                    attempts,
-                    channelsUsed
-                }
-            } catch (error) {
-                this.endRequest(currentChannel.id)
-                lastError = error
-
-                // 分析错误类型
-                const errorType = this.classifyError(error)
-                logger.warn(
-                    `[ChannelManager] 请求失败: 渠道=${currentChannel.name}, baseUrl=${currentChannel.baseUrl}, 类型=${errorType}, 错误=${error.message}`
-                )
-
-                // 报告错误
-                await this.reportError(currentChannel.id, {
-                    keyIndex: keyInfo.keyIndex,
-                    errorType,
-                    errorMessage: error.message,
-                    isRetry: attempts > 1
-                })
-
-                // 判断是否需要重试
-                if (attempts >= maxRetries) {
-                    break
-                }
-
-                // 尝试切换策略
-                let switched = false
-
-                // 1. 先尝试切换baseUrl（如果是网络错误）
-                if (switchBaseUrl && currentChannel.baseUrls && currentChannel.baseUrls.length > 1) {
-                    if (!triedBaseUrls.has(currentChannel.id)) {
-                        triedBaseUrls.set(currentChannel.id, new Set())
-                    }
-                    const triedIndices = triedBaseUrls.get(currentChannel.id)
-
-                    // 尝试下一个未使用过的baseUrl
-                    for (let i = 0; i < currentChannel.baseUrls.length; i++) {
-                        const nextIndex = (currentBaseUrlIndex + i + 1) % currentChannel.baseUrls.length
-                        if (!triedIndices.has(nextIndex)) {
-                            const nextBaseUrl = this.switchToNextBaseUrl(currentChannel.id, currentBaseUrlIndex)
-                            if (nextBaseUrl) {
-                                triedIndices.add(nextIndex)
-                                currentBaseUrlIndex = nextIndex
-                                currentChannel.baseUrl = nextBaseUrl
-                                logger.info(
-                                    `[ChannelManager] 切换baseUrl: ${currentChannel.name} -> ${nextBaseUrl} (索引: ${nextIndex})`
-                                )
-                                switched = true
-                                break
-                            }
-                        }
-                    }
-                }
-
-                // 2. baseUrl切换失败，尝试同渠道切换Key
-                if (!switched && switchKey && currentChannel.apiKeys?.length > 1) {
-                    const nextKey = this.getNextAvailableKey(currentChannel.id, keyInfo.keyIndex)
-                    if (nextKey) {
-                        logger.info(
-                            `[ChannelManager] 切换Key: ${currentChannel.name} Key#${keyInfo.keyIndex + 1} -> Key#${nextKey.keyIndex + 1}`
-                        )
-                        currentChannel.keyIndex = nextKey.keyIndex
-                        switched = true
-                    }
-                }
-
-                // 3. Key切换失败，尝试切换渠道
-                if (!switched && switchChannel) {
-                    const fallbackChannels = this.getAvailableChannels(model, {
-                        excludeChannelId: currentChannel.id
-                    }).filter(ch => !triedChannels.has(ch.id))
-
-                    if (fallbackChannels.length > 0) {
-                        const nextChannel = fallbackChannels[0]
-                        logger.info(`[ChannelManager] 切换渠道: ${currentChannel.name} -> ${nextChannel.name}`)
-                        currentChannel = nextChannel
-                        currentBaseUrlIndex =
-                            nextChannel.selectedBaseUrlIndex !== undefined
-                                ? nextChannel.selectedBaseUrlIndex
-                                : nextChannel.baseUrls?.length > 0
-                                  ? 0
-                                  : null
-                        switched = true
-                    }
-                }
-
-                // 4. 都无法切换，延迟后重试当前渠道
-                if (!switched) {
-                    logger.debug(`[ChannelManager] 无可切换选项，延迟${retryDelay}ms后重试`)
-                }
-
-                // 延迟重试
-                await new Promise(r => setTimeout(r, retryDelay * attempts))
-            }
-        }
-
-        return {
-            success: false,
-            error: lastError?.message || '请求失败，已达最大重试次数',
-            attempts,
-            channelsUsed
-        }
-    }
-
-    /**
-     * 分类错误类型
-     * @param {Error} error
-     * @returns {string} 错误类型
-     */
-    classifyError(error) {
-        const msg = error.message?.toLowerCase() || ''
-
-        if (
-            msg.includes('401') ||
-            msg.includes('403') ||
-            msg.includes('unauthorized') ||
-            msg.includes('invalid api key')
-        ) {
-            return 'auth'
-        }
-        if (msg.includes('429') || msg.includes('rate limit') || msg.includes('quota') || msg.includes('exceeded')) {
-            return 'quota'
-        }
-        if (
-            msg.includes('timeout') ||
-            msg.includes('timed out') ||
-            msg.includes('econnrefused') ||
-            msg.includes('enotfound')
-        ) {
-            return 'network'
-        }
-        if (
-            msg.includes('choices字段缺失') ||
-            msg.includes('未能生成回复') ||
-            (msg.includes('completion_tokens') && msg.includes('0'))
-        ) {
-            return 'empty'
-        }
-        if (msg.includes('500') || msg.includes('502') || msg.includes('503') || msg.includes('504')) {
-            return 'server'
-        }
-
-        return 'unknown'
     }
 
     /**

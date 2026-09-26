@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import crypto from 'node:crypto'
 import { chatLogger } from '../../utils/logger.js'
+import { requestTemplateService } from '../../../services/proxy/RequestTemplateService.js'
 import {
     AbstractClient,
     parseXmlToolCalls,
@@ -71,6 +72,21 @@ export class ClaudeClient extends AbstractClient {
         const baseURL = this.baseUrl ? this.baseUrl.replace(/\/v1\/?$/i, '') : undefined
         const baseUrlClean = baseURL?.replace(/\/+$/, '') || ''
         const clientOptions = { apiKey, baseURL }
+        const templateContext = {
+            apiKey,
+            baseUrl: this.baseUrl,
+            channelName: this.options?.channelName || '',
+            userAgent: this.options?.userAgent,
+            xff: this.options?.xff
+        }
+        if (this.options?.headersTemplate) {
+            const builtHeaders = requestTemplateService.buildHeaders(this.options.headersTemplate, templateContext)
+            if (builtHeaders && Object.keys(builtHeaders).length > 0) {
+                clientOptions.defaultHeaders = builtHeaders
+            }
+        } else if (this.options?.customHeaders && Object.keys(this.options.customHeaders).length > 0) {
+            clientOptions.defaultHeaders = this.options.customHeaders
+        }
         // 接通渠道 timeout.read，未配置时沿用 SDK 默认值
         const requestTimeout = this.resolveRequestTimeout()
         if (requestTimeout) {

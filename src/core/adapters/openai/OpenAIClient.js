@@ -497,6 +497,7 @@ export class OpenAIClient extends AbstractClient {
             logger.debug('[OpenAI适配器] 使用代理:', proxyService.getProfileForScope('channel')?.name)
         }
 
+        /* 自定义端点需锚定基础地址；baseUrl 为空仅发生在"无渠道配置直构造"场景，保留官方地址作最后防御 */
         const originalBaseUrl = (this.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '')
         const buildEndpointUrl = endpointPath =>
             originalBaseUrl + (endpointPath.startsWith('/') ? endpointPath : '/' + endpointPath)
@@ -1431,6 +1432,7 @@ export class OpenAIClient extends AbstractClient {
         sdkClient.apiKey = client.apiKey
         sdkClient.buildURL = (path, query, defaultBaseURL) => {
             if (path === '/responses' && explicitWsUrl) {
+                /* 硬编码仅作"无渠道配置直构造"的最后防御；委托器/渠道路径恒有 baseUrl，不会落到这里 */
                 const baseUrl = `${this.baseUrl || 'https://api.openai.com/v1'}`.replace(/\/?$/, '/')
                 const url = new URL(String(explicitWsUrl).trim(), baseUrl)
                 if (query && typeof query === 'object') {

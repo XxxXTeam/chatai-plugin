@@ -2,7 +2,13 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import test from 'node:test'
 import express from 'express'
-import { clearApiEtagCache, createApiEtagCacheMiddleware } from '../src/services/middleware/apiEtagCache.js'
+import cookieParser from 'cookie-parser'
+import jwt from 'jsonwebtoken'
+import {
+    clearApiEtagCache,
+    createApiEtagCacheMiddleware,
+    createJwtIdentityResolver
+} from '../src/services/middleware/apiEtagCache.js'
 
 /**
  * 启动测试应用并返回取址信息
@@ -323,6 +329,169 @@ test('写操作通过后按身份前缀自动失效对应 GET 缓存', async () 
             headers: { 'x-test-user': 'user-b', 'if-none-match': firstList.headers.get('etag') }
         })
         assert.equal(otherView.status, 200, '身份隔离的缓存不受他身份写操作影响')
+    } finally {
+        await close()
+    }
+})
+
+/**
+ * 构造带 jti 的登录 JWT，用于基于 createJwtIdentityResolver 的用例。
+ * @param {string} secretKey - HMAC 密钥
+ * @param {string} jti - 会话标识
+ * @param {object} [overrides] - 覆盖 payload 的字段
+ * @returns {string} 签名后的 JWT
+ */
+function signSessionToken(secretKey, jti, overrides = {}) {
+    return jwt.sign(
+        {
+            authenticated: true,
+            loginTime: Date.now(),
+            jti,
+            iss: 'chatai-panel',
+            aud: 'chatai-client',
+            ...overrides
+        },
+        secretKey,
+        { expiresIn: '30d', algorithm: 'HS256' }
+    )
+}
+
+test('JWT identityResolver：不同 jti 分桶、同 jti 命中 304、写操作按同一身份失效', async () => {
+    const secretKey = 'etag-test-secret'
+    const counter = { value: 0 }
+    const middleware = createApiEtagCacheMiddleware({
+        identityResolver: createJwtIdentityResolver({ secretKey })
+    })
+    const app = express()
+    app.use(middleware)
+    app.get('/api/scoped', (req, res) => {
+        counter.value += 1
+        res.json({ n: counter.value })
+    })
+    app.put('/api/scoped/1', (req, res) => res.json({ ok: true }))
+    const { baseUrl, close } = await startTestApp(app)
+    try {
+        const tokenA = signSessionToken(secretKey, 'jti-a')
+        const tokenB = signSessionToken(secretKey, 'jti-b')
+
+        const firstA = await fetch(`${baseUrl}/api/scoped`, {
+            headers: { authorization: `Bearer ${tokenA}` }
+        })
+        assert.equal(firstA.status, 200)
+        assert.equal((await firstA.json()).n, 1)
+
+        // 同 jti 携带 ETag 命中 304
+        const againA = await fetch(`${baseUrl}/api/scoped`, {
+            headers: { authorization: `Bearer ${tokenA}`, 'if-none-match': firstA.headers.get('etag') }
+        })
+        assert.equal(againA.status, 304)
+        assert.equal(counter.value, 1, '同 jti 命中 304 时路由不得再次执行')
+
+        // 不同 jti 落不同分桶：走完整路由且不被对方 304 干扰
+        const firstB = await fetch(`${baseUrl}/api/scoped`, {
+            headers: { authorization: `Bearer ${tokenB}` }
+        })
+        assert.equal(firstB.status, 200)
+        assert.equal((await firstB.json()).n, 2)
+
+        // 写操作（带 jti-a）后，jti-a 的 GET 缓存失效，jti-b 的分桶不受影响
+        await fetch(`${baseUrl}/api/scoped/1`, {
+            method: 'PUT',
+            headers: { authorization: `Bearer ${tokenA}`, 'content-type': 'application/json' },
+            body: '{}'
+        })
+        const staleA = await fetch(`${baseUrl}/api/scoped`, {
+            headers: { authorization: `Bearer ${tokenA}`, 'if-none-match': firstA.headers.get('etag') }
+        })
+        assert.equal(staleA.status, 200, '写操作以同一 jti 失效对应 GET 缓存')
+        const intactB = await fetch(`${baseUrl}/api/scoped`, {
+            headers: { authorization: `Bearer ${tokenB}`, 'if-none-match': firstB.headers.get('etag') }
+        })
+        assert.equal(intactB.status, 304, '他身份分桶不受本身份写操作影响')
+    } finally {
+        await close()
+    }
+})
+
+test('JWT identityResolver：Auth Cookie 与 Bearer 同 jti 共享分桶，签名与校验参数不符的 token 回落匿名桶', async () => {
+    const secretKey = 'etag-test-secret'
+    const counter = { value: 0 }
+    const middleware = createApiEtagCacheMiddleware({
+        identityResolver: createJwtIdentityResolver({ secretKey })
+    })
+    const app = express()
+    app.use(cookieParser())
+    app.use(middleware)
+    app.get('/api/cookie-scoped', (req, res) => {
+        counter.value += 1
+        res.json({ n: counter.value })
+    })
+    const { baseUrl, close } = await startTestApp(app)
+    try {
+        const tokenA = signSessionToken(secretKey, 'jti-a')
+
+        const viaCookie = await fetch(`${baseUrl}/api/cookie-scoped`, {
+            headers: { cookie: `auth_token=${tokenA}` }
+        })
+        assert.equal(viaCookie.status, 200)
+        assert.equal((await viaCookie.json()).n, 1)
+
+        // 同一 jti 换用 Bearer 携带也可命中同分桶
+        const viaBearer = await fetch(`${baseUrl}/api/cookie-scoped`, {
+            headers: { authorization: `Bearer ${tokenA}`, 'if-none-match': viaCookie.headers.get('etag') }
+        })
+        assert.equal(viaBearer.status, 304)
+        assert.equal(counter.value, 1)
+
+        // 签名无效与校验参数不符的 token 不参与分桶（回落匿名桶），匿名桶已存在同 ETag 时命中
+        const forged = jwt.sign(
+            { authenticated: true, jti: 'jti-a', iss: 'chatai-panel', aud: 'chatai-client' },
+            'forged-key',
+            { expiresIn: '1h', algorithm: 'HS256' }
+        )
+        const wrongIssuer = signSessionToken(secretKey, 'jti-a', { iss: 'other-panel' })
+        const anonymous = await fetch(`${baseUrl}/api/cookie-scoped`)
+        assert.equal(anonymous.status, 200, '无 token 请求落匿名桶并执行路由')
+        for (const invalid of [forged, wrongIssuer]) {
+            const response = await fetch(`${baseUrl}/api/cookie-scoped`, {
+                headers: { authorization: `Bearer ${invalid}`, 'if-none-match': anonymous.headers.get('etag') }
+            })
+            assert.equal(response.status, 304, '无效 token 回落匿名桶并命中匿名桶缓存')
+        }
+    } finally {
+        await close()
+    }
+})
+
+test('if-none-match 列表形式、强形式与额外空白均可命中弱 ETag', async () => {
+    const middleware = createApiEtagCacheMiddleware({ identityResolver: createIdentityResolver })
+    const app = express()
+    app.use(middleware)
+    app.get('/api/list-match', (req, res) => res.json({ stable: true }))
+    const { baseUrl, close } = await startTestApp(app)
+    try {
+        const first = await fetch(`${baseUrl}/api/list-match`)
+        assert.equal(first.status, 200)
+        const etag = first.headers.get('etag')
+        assert.match(etag, /^W\/"[0-9a-f]{16}"$/)
+
+        // 列表形式：多项里含目标 ETag
+        const asList = await fetch(`${baseUrl}/api/list-match`, {
+            headers: { 'if-none-match': `W/"deadbeef00000000", ${etag}` }
+        })
+        assert.equal(asList.status, 304)
+
+        // 强形式（去 W/ 前缀）与多余空白
+        const strongForm = await fetch(`${baseUrl}/api/list-match`, {
+            headers: { 'if-none-match': `  ${etag.replace(/^W\//, '')}  ` }
+        })
+        assert.equal(strongForm.status, 304)
+
+        // 列表形式：任一项都不匹配时回落 200
+        const missList = await fetch(`${baseUrl}/api/list-match`, {
+            headers: { 'if-none-match': 'W/"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"' }
+        })
+        assert.equal(missList.status, 200)
     } finally {
         await close()
     }

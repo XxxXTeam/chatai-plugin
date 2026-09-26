@@ -293,6 +293,7 @@ export function isSimilarContent(content1, content2, options = {}) {
  */
 export async function getAIResponse(eventDesc, options = {}) {
     const { userId, groupId, maxLength = 100, mode = 'roleplay', disableTools = false, logTag = 'AI' } = options
+    const startTime = Date.now()
     try {
         const { chatService } = await import('../services/llm/ChatService.js')
         const sendOpts = {
@@ -316,7 +317,24 @@ export async function getAIResponse(eventDesc, options = {}) {
         return reply
     } catch (err) {
         const log = global.logger || console
-        log.debug?.(`[${logTag}] AI响应失败: ${err.message}`) || log.log?.(`[${logTag}] AI响应失败: ${err.message}`)
+        log.warn?.(`[${logTag}] AI响应失败: ${err.message}`) || log.log?.(`[${logTag}] AI响应失败: ${err.message}`)
+        // 保留返回 null 契约（调用方依赖 null 静默跳过），仅补记失败统计
+        try {
+            const { statsService } = await import('../services/stats/StatsService.js')
+            await statsService.recordApiCall({
+                channelId: '',
+                channelName: '',
+                model: '',
+                duration: startTime ? Date.now() - startTime : 0,
+                success: false,
+                error: err.message || String(err),
+                source: 'group-event-ai',
+                userId: userId !== undefined && userId !== null ? String(userId) : null,
+                groupId: groupId !== undefined && groupId !== null ? String(groupId) : null
+            })
+        } catch (statsErr) {
+            /* 统计失败不影响主流程 */
+        }
         return null
     }
 }

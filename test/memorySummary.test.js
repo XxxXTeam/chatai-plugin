@@ -11,6 +11,7 @@ import { memorySummarizer, parseMemorySummaryResponse } from '../src/services/me
 import { statsService } from '../src/services/stats/StatsService.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
 import { memoryManager } from '../src/services/storage/MemoryManager.js'
+import { channelManager } from '../src/services/llm/ChannelManager.js'
 
 let db
 
@@ -185,8 +186,19 @@ test('共享群记忆总结只读取目标用户轮次', async () => {
     const originalGetChatClient = LlmService.getChatClient
     const originalRecordApiCall = statsService.recordApiCall
     let receivedPrompt = ''
+    const mockChannel = {
+        id: 'test',
+        name: 'test',
+        models: ['test-model'],
+        apiKey: 'sk-test',
+        adapterType: 'openai',
+        enabled: true,
+        baseUrl: 'https://api.invalid/v1',
+        advanced: { llm: {}, streaming: { enabled: false } },
+        overrides: {}
+    }
     LlmService.getChatClient = async () => ({
-        _channelInfo: { id: 'test', name: 'test', model: 'test-model' },
+        _channelInfo: { id: 'test', name: 'test', model: 'test-model', channel: mockChannel },
         sendMessage: async message => {
             receivedPrompt = message.content[0].text
             return { contents: [{ type: 'text', text: '用户A长期住在上海\n用户A喜欢手冲咖啡' }] }
@@ -419,20 +431,22 @@ test('内部客户端优先使用 sendMessageWithHistory 并读取 contents', as
     let historyCalls = 0
     let sendCalls = 0
     const client = {
+        _channelInfo: { id: 'test-client', model: 'test-model' },
         sendMessageWithHistory: async history => {
             historyCalls++
             assert.deepEqual(history, [{ role: 'user', content: [{ type: 'text', text: '总结提示' }] }])
             return { contents: [{ type: 'text', text: '统一响应' }] }
         },
-        sendMessage: async () => {
+        sendMessage: async (_message, options) => {
             sendCalls++
-            return '错误分支'
+            assert.equal(options.model, 'test-model')
+            return { contents: [{ type: 'text', text: '统一响应' }] }
         }
     }
 
     assert.equal(await callMemoryLLM(client, '总结提示'), '统一响应')
-    assert.equal(historyCalls, 1)
-    assert.equal(sendCalls, 0)
+    assert.equal(sendCalls, 1)
+    assert.equal(historyCalls, 0) // 委托统一走 sendMessage（单消息发送契约）
 })
 
 test('会话群标识解析支持 QQBot OpenID 和频道标识', () => {
@@ -484,15 +498,28 @@ test('频道会话总结把完整 qg 群标识传给渠道选择', async () => {
 
     const originalGetChatClient = LlmService.getChatClient
     let receivedGroupId = null
+    const mockChannel = {
+        id: 'test',
+        name: 'test',
+        models: ['test-model'],
+        apiKey: 'sk-test',
+        adapterType: 'openai',
+        enabled: true,
+        baseUrl: 'https://api.invalid/v1',
+        advanced: { llm: {}, streaming: { enabled: false } },
+        overrides: {}
+    }
     LlmService.getChatClient = async options => {
         receivedGroupId = options.groupId
         return {
+            _channelInfo: { id: 'test', model: 'test-model', channel: mockChannel },
             sendMessage: async () => ({ contents: [{ type: 'text', text: '频道对话摘要\n未解决：无' }] })
         }
     }
 
     try {
         assert.equal(await contextManager.summarizeConversation(conversationId), true)
+        // 渠道选择传给 getChatClient 的 groupId 必须为完整频道标识
         assert.equal(receivedGroupId, 'qg_guild-channel')
         const remaining = databaseService.getMessages(conversationId, 100)
         assert.equal(remaining.length, 1)

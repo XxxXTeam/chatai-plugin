@@ -9,6 +9,7 @@ import config from '../../../config/config.js'
 import { LlmService } from './LlmService.js'
 import { channelManager } from './ChannelManager.js'
 import { resolveTemperature } from './TemperatureResolver.js'
+import { delegateRequest } from './LlmDelegator.js'
 
 const logger = chatLogger
 
@@ -181,6 +182,10 @@ class ConversationTrackerService {
      * @returns {Promise<boolean>}
      */
     async isUserTalkingToBot(userMessage, chatHistory = []) {
+        let trackingStart = null
+        let trackingChannel = null
+        let trackingModel = null
+
         try {
             const botName = config.get('bot.nickname') || globalThis.Bot?.nickname || '机器人'
             const botId = globalThis.Bot?.uin || ''
@@ -192,11 +197,13 @@ class ConversationTrackerService {
                     : '(无历史记录)'
 
             // 获取判断用的模型配置
-            const trackingModel =
+            trackingStart = Date.now()
+            trackingModel =
                 config.get('conversationTracking.model') || config.get('llm.models.dispatch') || LlmService.getModel()
 
             await channelManager.init()
             const channel = channelManager.getBestChannel(trackingModel)
+            trackingChannel = channel
             if (!channel) {
                 logger.warn('[ConversationTracker] 未找到可用渠道')
                 return false
@@ -244,43 +251,37 @@ class ConversationTrackerService {
             })
 
             /*
-             * 判定是轻量旁路调用：优先接管统一委托（渠道 advanced.streaming 遵循 + 失败重试/切渠道），
-             * 异常时回退为原有直连路径，两层都失败才按 false（放弃判定）处理。
+             * 判定是轻量旁路调用：统一经 delegateRequest（渠道 advanced.streaming 遵循 + 失败重试/切渠道），
+             * 不再保留直连兜底，异常由外层 catch 按 false（放弃判定）处理。
              */
-            let response
-            try {
-                const { callWithChannelDelegate } = await import('./LlmDelegate.js')
-                const systemText =
-                    typeof messages.find(m => m.role === 'system')?.content === 'string'
-                        ? messages.find(m => m.role === 'system').content
-                        : ''
-                const rawUserContent = messages.find(m => m.role === 'user')?.content
-                if (rawUserContent === undefined || rawUserContent === null || rawUserContent === '') {
-                    throw new Error('[ConversationTracker] 缺少用户消息')
-                }
-                const messageContent = Array.isArray(rawUserContent)
-                    ? rawUserContent
-                    : [{ type: 'text', text: String(rawUserContent) }]
+            const systemText =
+                typeof messages.find(m => m.role === 'system')?.content === 'string'
+                    ? messages.find(m => m.role === 'system').content
+                    : ''
+            const rawUserContent = messages.find(m => m.role === 'user')?.content
+            if (rawUserContent === undefined || rawUserContent === null || rawUserContent === '') {
+                throw new Error('[ConversationTracker] 缺少用户消息')
+            }
+            const messageContent = Array.isArray(rawUserContent)
+                ? rawUserContent
+                : [{ type: 'text', text: String(rawUserContent) }]
 
-                const delegated = await callWithChannelDelegate(
-                    { role: 'user', content: messageContent },
-                    {
-                        model: trackingModel,
-                        maxToken: 10,
-                        ...(_trackTemp !== undefined ? { temperature: _trackTemp } : {}),
-                        ...(systemText ? { systemOverride: systemText } : {}),
-                        caller: 'ConversationTracker'
-                    }
-                )
-                response = delegated.response
-            } catch (delegateError) {
-                logger.debug('[ConversationTracker] LlmDelegate 失败，回退直连:', delegateError.message)
-                response = await client.sendMessageWithHistory(messages, {
+            const delegated = await delegateRequest({
+                userMessage: { role: 'user', content: messageContent },
+                initialModel: trackingModel,
+                initialChannel: channel,
+                initialClient: client,
+                clientBaseOptions: {},
+                requestOptions: {
                     model: trackingModel,
                     maxToken: 10,
-                    ...(_trackTemp !== undefined ? { temperature: _trackTemp } : {})
-                })
-            }
+                    ...(_trackTemp !== undefined ? { temperature: _trackTemp } : {}),
+                    ...(systemText ? { systemOverride: systemText } : {})
+                },
+                event: null,
+                source: 'conversation-tracker'
+            })
+            const response = delegated.response
 
             const answer = (
                 response?.content?.find(c => c.type === 'text')?.text ||
@@ -292,6 +293,20 @@ class ConversationTrackerService {
             return answer === 'true' || answer?.includes('true')
         } catch (error) {
             logger.error('[ConversationTracker] AI判断失败:', error.message)
+            try {
+                const { statsService } = await import('../stats/StatsService.js')
+                await statsService.recordApiCall({
+                    channelId: trackingChannel?.id || 'conversation-tracker',
+                    channelName: trackingChannel?.name || '会话追踪',
+                    model: trackingModel || 'unknown',
+                    duration: trackingStart ? Date.now() - trackingStart : 0,
+                    success: false,
+                    error: error.message || String(error),
+                    source: 'conversation-tracker-single'
+                })
+            } catch (statsErr) {
+                logger.debug('[ConversationTracker] 统计记录失败:', statsErr.message)
+            }
             return false
         }
     }
@@ -414,11 +429,22 @@ ${recentHistory || '(无)'}
                 preset: null,
                 channel: { advanced: { llm: channel.advanced?.llm || {} }, overrides: channel.overrides || {} }
             })
-            const response = await client.sendMessageWithHistory(batchMessages, {
-                model: trackingModel,
-                maxToken: 200,
-                ...(_batchTemp !== undefined ? { temperature: _batchTemp } : {})
+            const delegated = await delegateRequest({
+                userMessage: { role: 'user', content: [{ type: 'text', text: batchMessages[1].content }] },
+                initialModel: trackingModel,
+                initialChannel: channel,
+                initialClient: client,
+                clientBaseOptions: {},
+                requestOptions: {
+                    model: trackingModel,
+                    maxToken: 200,
+                    ...(_batchTemp !== undefined ? { temperature: _batchTemp } : {}),
+                    systemOverride: batchMessages[0].content
+                },
+                event: null,
+                source: 'conversation-tracker-batch'
             })
+            const response = delegated.response
 
             let content = (response?.content?.find(c => c.type === 'text')?.text || '').trim() || '{}'
             const jsonMatch = content.match(/\{[\s\S]*\}/)

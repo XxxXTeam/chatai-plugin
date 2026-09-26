@@ -145,7 +145,7 @@ import {
     ChaiteResponse
 } from './routes/index.js'
 import { errorHandler } from './middleware/ApiResponse.js'
-import { createApiEtagCacheMiddleware } from './middleware/apiEtagCache.js'
+import { createApiEtagCacheMiddleware, createJwtIdentityResolver } from './middleware/apiEtagCache.js'
 import { nlSchedulerService } from './scheduler/NLSchedulerService.js'
 import { groupSummaryPushService } from './group/GroupSummaryPushService.js'
 
@@ -546,8 +546,17 @@ class WebServer {
         const auth = this.authMiddleware.bind(this)
         const mountPath = this.mountPath
 
-        // API ETag 协商缓存：置于 router 最前，GET 请求按会话身份（req.user.jti）分桶
-        this.router.use(createApiEtagCacheMiddleware())
+        /*
+         * API ETag 协商缓存：置于 router 最前，先于每条 API 路由的 auth 中间件执行，
+         * req.user 尚未填充，因此身份解析交给自己解码 JWT（Authorization: Bearer 或
+         * auth_token Cookie）取 jti，与 authMiddleware 共用同一密钥与校验参数。
+         * 无 token / 签名无效回落匿名桶；公开端点仍按原样放行。
+         */
+        this.router.use(
+            createApiEtagCacheMiddleware({
+                identityResolver: createJwtIdentityResolver({ secretKey: authKey })
+            })
+        )
 
         this.router.get('/login/token', async (req, res) => {
             const { token } = req.query

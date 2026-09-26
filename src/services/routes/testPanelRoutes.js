@@ -5,7 +5,7 @@ import { ApiResponse } from './shared.js'
 import { chatLogger } from '../../core/utils/logger.js'
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 历史遗留导入，暂保留
 import config from '../../../config/config.js'
-import { resolveTemperature, resolveClientTemperature } from '../llm/TemperatureResolver.js'
+import { resolveTemperature } from '../llm/TemperatureResolver.js'
 
 const router = express.Router()
 
@@ -112,26 +112,12 @@ async function runBatchTestSse(req, res) {
         sendEvent('testing', { model, index: idx, running })
 
         try {
-            const { OpenAIClient } = await import('../../core/adapters/index.js')
-
             let apiKey = channel.apiKey
             let keyInfo = null
             if (channel.apiKeys && channel.apiKeys.length > 0) {
                 keyInfo = channelManager.getChannelKey(channel, { recordUsage: false })
                 apiKey = keyInfo.key
             }
-
-            const client = new OpenAIClient({
-                apiKey,
-                baseUrl: channel.baseUrl,
-                chatPath: channel.chatPath, // 自定义对话路径
-                customHeaders: channel.customHeaders || {},
-                headersTemplate: channel.headersTemplate || '',
-                requestBodyTemplate: channel.requestBodyTemplate || '',
-                imageConfig: channel.imageConfig || {},
-                features: ['chat'],
-                tools: []
-            })
 
             /* 批量测试尊重渠道/模型级温度覆盖与禁用配置 */
             const { temperature: testTemperature } = resolveTemperature({
@@ -141,10 +127,19 @@ async function runBatchTestSse(req, res) {
                 channel
             })
 
-            const response = await client.sendMessage(
-                { role: 'user', content: [{ type: 'text', text: '你好' }] },
-                { model, maxToken: 50, temperature: testTemperature }
-            )
+            /* 统一委托调度：锁定渠道只测指定渠道/当前 Key/指定模型 */
+            const { delegateRequest } = await import('../llm/LlmDelegator.js')
+            const delegated = await delegateRequest({
+                userMessage: { role: 'user', content: [{ type: 'text', text: '你好' }] },
+                initialModel: model,
+                initialChannel: channel,
+                clientBaseOptions: {},
+                requestOptions: { model, maxToken: 50, temperature: testTemperature },
+                event: null,
+                source: 'batch-test',
+                lockChannel: true
+            })
+            const response = delegated.response
 
             const elapsed = Date.now() - startTime
             const replyText =
@@ -359,8 +354,6 @@ router.post('/quick-test', async (req, res) => {
     }
 
     try {
-        const { OpenAIClient } = await import('../../core/adapters/index.js')
-
         let apiKey = channel.apiKey
         let keyInfo = null
         if (channel.apiKeys && channel.apiKeys.length > 0) {
@@ -368,30 +361,29 @@ router.post('/quick-test', async (req, res) => {
             apiKey = keyInfo.key
         }
 
-        const client = new OpenAIClient({
-            apiKey,
-            baseUrl: channel.baseUrl,
-            chatPath: channel.chatPath,
-            imageConfig: channel.imageConfig || {},
-            features: ['chat'],
-            tools: []
-        })
-
+        const requestModel = model || channel.models?.[0]
         sendEvent('start', {
-            model: model || channel.models?.[0],
+            model: requestModel,
             channel: channel.name,
             message
         })
 
-        const _temp = resolveClientTemperature(client, 0.7)
-        const response = await client.sendMessage(
-            { role: 'user', content: [{ type: 'text', text: message }] },
-            {
-                model: model || channel.models?.[0],
-                maxToken: 100,
-                ...(_temp !== undefined ? { temperature: _temp } : {})
-            }
-        )
+        /* 统一委托调度：锁定渠道只测指定渠道/当前 Key/指定模型 */
+        const { delegateRequest } = await import('../llm/LlmDelegator.js')
+        const delegated = await delegateRequest({
+            userMessage: { role: 'user', content: [{ type: 'text', text: message }] },
+            initialModel: requestModel,
+            initialChannel: channel,
+            clientBaseOptions: {},
+            requestOptions: {
+                model: requestModel,
+                maxToken: 100
+            },
+            event: null,
+            source: 'quick-test',
+            lockChannel: true
+        })
+        const response = delegated.response
 
         const elapsed = Date.now() - startTime
         const replyText =
@@ -402,7 +394,7 @@ router.post('/quick-test', async (req, res) => {
 
         sendEvent('result', {
             success: true,
-            model: model || channel.models?.[0],
+            model: requestModel,
             elapsed,
             response: replyText,
             keyInfo: keyInfo ? { name: keyInfo.keyName, index: keyInfo.keyIndex } : null

@@ -743,22 +743,24 @@ export const bltoolsTools = [
                         ]
                     }
                 ]
-
-                // 发送请求
-                const response = await client.sendMessageWithHistory(messages, {
-                    model: imageModel,
-                    stream: false
+                const { delegateRequest } = await import('../../services/llm/LlmDelegator.js')
+                const delegated = await delegateRequest({
+                    userMessage: { role: 'user', content: messages[0].content },
+                    initialModel: imageModel,
+                    initialChannel: imgChannel || null,
+                    initialClient: client,
+                    clientBaseOptions: {},
+                    requestOptions: { model: imageModel, stream: false },
+                    event: null,
+                    source: 'mcp-ai-image-edit'
                 })
-
-                // 处理响应 - 从 Chaite 格式提取文本内容
+                const response = delegated.response
+                const contentBlocks = Array.isArray(response?.contents) ? response.contents : response?.content || []
                 const content =
-                    response?.content
+                    contentBlocks
                         ?.filter(c => c.type === 'text')
                         ?.map(c => c.text)
                         ?.join('') || ''
-
-                // 尝试从响应中提取图片
-                // Markdown格式: ![xxx](data:image/...;base64,xxx) 或 ![xxx](https://...)
                 const mdMatch = content.match(/!\[.*?\]\((data:image\/[^;]+;base64,[^)]+|https?:\/\/[^)]+)\)/)
                 if (mdMatch) {
                     const imgUrl = mdMatch[1]
@@ -1116,7 +1118,7 @@ export const bltoolsTools = [
                     }
                 }
 
-                // 创建LLM客户端并发送请求
+                // 创建LLM客户端并发送请求（统一委托调度）
                 const client = await LlmService.createClient({
                     model: selectedModel,
                     apiKey: channelManager.getChannelKey(selectedChannel).key,
@@ -1136,13 +1138,23 @@ export const bltoolsTools = [
                     }
                 ]
 
-                const response = await client.sendMessageWithHistory(messages, {
-                    model: selectedModel,
-                    stream: false
+                const { delegateRequest } = await import('../../services/llm/LlmDelegator.js')
+                const delegated = await delegateRequest({
+                    userMessage: { role: 'user', content: messages[0].content },
+                    initialModel: selectedModel,
+                    initialChannel: selectedChannel,
+                    initialClient: client,
+                    clientBaseOptions: {},
+                    requestOptions: { model: selectedModel, stream: false },
+                    event: null,
+                    source: 'mcp-video-analysis'
                 })
+                const response = delegated.response
 
+                // 视频分析结果提取（委托返回 contents，直连返回 content，兼容两者）
+                const analysisBlocks = Array.isArray(response?.contents) ? response.contents : response?.content || []
                 const analysis =
-                    response?.content
+                    analysisBlocks
                         ?.filter(c => c.type === 'text')
                         ?.map(c => c.text)
                         ?.join('') || ''
@@ -1248,12 +1260,23 @@ export const bltoolsTools = [
                     content: [{ type: 'text', text: `请根据以下描述生成思维导图：${prompt}` }]
                 }
 
-                const response = await client.sendMessage(userMessage, {
-                    model,
-                    systemOverride: systemPrompt,
-                    stream: false,
-                    maxToken: 4096
+                const { delegateRequest } = await import('../../services/llm/LlmDelegator.js')
+                const delegated = await delegateRequest({
+                    userMessage,
+                    initialModel: model,
+                    initialChannel: channel,
+                    initialClient: client,
+                    clientBaseOptions: {},
+                    requestOptions: {
+                        model,
+                        systemOverride: systemPrompt,
+                        stream: false,
+                        maxToken: 4096
+                    },
+                    event: null,
+                    source: 'mcp-mindmap'
                 })
+                const response = delegated.response
 
                 // 从 contents 数组中提取文本内容
                 const textContent = response?.contents?.find(c => c.type === 'text')

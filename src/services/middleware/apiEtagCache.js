@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import jwt from 'jsonwebtoken'
 import { chatLogger } from '../../core/utils/logger.js'
 
 /**
@@ -35,6 +36,16 @@ let activeCache = null
  * @property {number} [maxBytes]
  * @property {string} [pathPrefix]
  * @property {(req: import('express').Request) => string | null | undefined} [identityResolver]
+ */
+
+/**
+ * 类型定义：JwtIdentityResolverOptions
+ * @typedef {object} JwtIdentityResolverOptions
+ * @property {string} secretKey - 与 authMiddleware 一致的 HMAC 密钥
+ * @property {string} [algorithm='HS256']
+ * @property {string} [issuer='chatai-panel']
+ * @property {string} [audience='chatai-client']
+ * @property {string} [cookieName='auth_token']
  */
 
 /**
@@ -173,6 +184,76 @@ function computeEtag(bodyText) {
 }
 
 /**
+ * 从 Authorization: Bearer <token> 头或按名称的 Cookie 中取出原始 JWT 字符串。
+ * 取不到任何 token 时返回空字符串。
+ * @param {import('express').Request} req - Express 请求对象
+ * @param {string} cookieName - 保存登录 JWT 的 Cookie 名
+ * @returns {string} 原始 JWT 字符串，无 token 时为空字符串
+ */
+function extractBearerToken(req, cookieName) {
+    const authHeader = req.headers.authorization
+    if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+        const bearer = authHeader.substring(7)
+        if (bearer) return bearer
+    }
+    const cookieToken = typeof req.cookies === 'object' ? req.cookies[cookieName] : undefined
+    if (typeof cookieToken === 'string' && cookieToken) return cookieToken
+    return ''
+}
+
+/**
+ * 创建基于登录 JWT 的会话身份解析器。
+ *
+ * 背景：ETag 中间件挂在 router 最前，先于每条 API 路由的 auth 中间件执行，
+ * 因此执行时 req.user 恒为 undefined。该解析器自行从请求的
+ * Authorization: Bearer / auth_token Cookie 中取原始 JWT，用与 authMiddleware
+ * 相同的密钥与校验参数解码后取 payload.jti 作会话分桶键，保证：
+ * - 写操作失效时的 identity 与 GET 写回时的 identity 取自同一 jti；
+ * - 签名无效 / 过期 / 参数不符的 token 一律回落匿名桶，不回应野 jti；
+ * - 无 token 或 decode 失败的请求落入匿名桶，行为与旧版一致。
+ *
+ * @param {JwtIdentityResolverOptions} options - 密钥与校验参数
+ * @returns {(req: import('express').Request) => string} 解析出的 jti；取不到时为空字符串
+ */
+export function createJwtIdentityResolver({
+    secretKey,
+    cookieName = 'auth_token',
+    algorithm = 'HS256',
+    issuer = 'chatai-panel',
+    audience = 'chatai-client'
+}) {
+    return function jwtIdentityResolver(req) {
+        const token = extractBearerToken(req, cookieName)
+        if (!token) return ''
+        try {
+            const decoded = jwt.verify(token, secretKey, { algorithms: [algorithm], issuer, audience })
+            return typeof decoded === 'object' && typeof decoded.jti === 'string' ? decoded.jti : ''
+        } catch {
+            return ''
+        }
+    }
+}
+
+/**
+ * 判断 if-none-match 请求头是否命中所托管的弱 ETag。
+ *
+ * 按 RFC 7232：值可以是空格分隔的标签列表（如 `W/"a", W/"b"`），
+ * 存在性比较本身不区分强弱前缀，因此把每一项的 `W/` 前缀去掉后
+ * 与缓存条目做全等比较，任一项相等即命中。
+ * @param {string|undefined} headerValue - if-none-match 头的原始值
+ * @param {string} entryEtag - 缓存条目托管的弱 ETag（形如 W/"<hash>"）
+ * @returns {boolean} 是否命中
+ */
+function ifNoneMatchHits(headerValue, entryEtag) {
+    if (typeof headerValue !== 'string' || headerValue.length === 0) return false
+    for (const rawPart of headerValue.split(',')) {
+        const normalized = rawPart.trim().replace(/^W\//, '')
+        if (normalized === entryEtag.replace(/^W\//, '')) return true
+    }
+    return false
+}
+
+/**
  * 生成缓存键的日志摘要，避免日志中出现完整 URL 与 query（可能含临时 Token）。
  * @param {string} identity - 身份标识
  * @param {string} originalUrl - 原始请求路径
@@ -248,7 +329,7 @@ export function createApiEtagCacheMiddleware(options = {}) {
 
         if (cache.has(key)) {
             const entry = cache.get(key)
-            if (req.headers['if-none-match'] === entry.etag) {
+            if (ifNoneMatchHits(req.headers['if-none-match'], entry.etag)) {
                 res.setHeader('ETag', entry.etag)
                 res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate')
                 chatLogger.debug('ApiETag', `[ETag缓存] 命中 304 - ${briefKey(identity, req.originalUrl)}`)

@@ -19,11 +19,12 @@ import { SkillsAgent, convertMcpTools } from './SkillsAgent.js'
 import { resolveConfiguredToolChoice } from '../tools/ToolChoiceService.js'
 import { resolveThinkingOptions as resolveConfiguredThinkingOptions } from '../llm/ThinkingOptions.js'
 import { resolveChannelSystemPrompt } from '../llm/SystemPromptConfig.js'
-import { resolveTemperature, resolveClientTemperature } from '../llm/TemperatureResolver.js'
+import { resolveClientTemperature } from '../llm/TemperatureResolver.js'
 import { attachToolMetadata } from '../../core/adapters/tooling.js'
 import { applySkillToolConstraints, getSkillToolConstraints } from '../skills/SkillToolConstraints.js'
 import { resolveToolPermission } from '../tools/ToolPermission.js'
 import { sendSegmentedMessage } from '../../utils/messageSegment.js'
+import { delegateRequest } from '../llm/LlmDelegator.js'
 /**
  * 工具使用原则。
  * 无论是否能从 skills.yaml 读到分组，这套判断标准都相同，
@@ -607,6 +608,12 @@ export class ChatAgent {
         // 发送请求（带回退）
         const requestStartTime = Date.now()
         let response, finalUsage, allToolLogs, lastError, upstreamReportedModel
+        let usedChannelForStats = null
+        let usedModelForStats = null
+        let fallbackUsedForStats = false
+        let channelSwitchedForStats = false
+        let totalRetryCountForStats = 0
+        let switchChainForStats = []
 
         try {
             const result = await this._sendWithFallback(client, userMessage, requestOptions, {
@@ -623,6 +630,12 @@ export class ChatAgent {
             finalUsage = result.usage
             upstreamReportedModel = result.reportedModel
             allToolLogs = result.toolLogs || []
+            usedChannelForStats = result.usedChannel || null
+            usedModelForStats = result.usedModel || llmModel
+            fallbackUsedForStats = result.fallbackUsed || false
+            channelSwitchedForStats = result.channelSwitched || false
+            totalRetryCountForStats = result.totalRetryCount || 0
+            switchChainForStats = result.switchChain || []
         } catch (error) {
             lastError = error
             throw error
@@ -639,6 +652,13 @@ export class ChatAgent {
                 userId,
                 groupId,
                 stream: requestOptions.stream,
+                usedChannel: usedChannelForStats,
+                usedModel: usedModelForStats,
+                fallbackUsed: fallbackUsedForStats,
+                channelSwitched: channelSwitchedForStats,
+                totalRetryCount: totalRetryCountForStats,
+                switchChain: switchChainForStats,
+                previousChannelId: channel?.id,
                 debugInfo,
                 messages,
                 systemPrompt,
@@ -829,20 +849,30 @@ export class ChatAgent {
                 enableTools: false
             })
 
-            const dispatchMessages = [
-                { role: 'system', content: dispatchPrompt },
-                { role: 'user', content: message }
-            ]
-
             const _dispatchTemp = resolveClientTemperature(client, 0.1)
-            const response = await client.sendMessageWithHistory(dispatchMessages, {
-                model: dispatchModel,
-                ...(_dispatchTemp !== undefined ? { temperature: _dispatchTemp } : {}),
-                maxToken: 500
+            const delegated = await delegateRequest({
+                userMessage: { role: 'user', content: [{ type: 'text', text: message }] },
+                initialModel: dispatchModel,
+                initialChannel: client._channelInfo?.channel || null,
+                initialClient: client,
+                clientBaseOptions: {},
+                requestOptions: {
+                    model: dispatchModel,
+                    ...(_dispatchTemp !== undefined ? { temperature: _dispatchTemp } : {}),
+                    maxToken: 500,
+                    systemOverride: typeof dispatchPrompt === 'string' ? dispatchPrompt : undefined
+                },
+                event: null,
+                source: 'chat-agent-dispatch'
             })
+            const response = delegated.response
 
-            // 解析响应
-            const contentArray = Array.isArray(response?.content) ? response.content : []
+            // 解析响应（委托返回 sendMessage 的 contents 形状，直连返回 content 形状，兼容两者）
+            const contentArray = Array.isArray(response?.content)
+                ? response.content
+                : Array.isArray(response?.contents)
+                  ? response.contents
+                  : []
             const responseText =
                 contentArray
                     .filter(c => c.type === 'text')
@@ -1373,7 +1403,12 @@ chat 组仅限纯问候闲聊（你好/谢谢/再见等）；凡涉及数据获�
     }
 
     /**
-     * 发送请求（带回退）
+     * 发送请求（带回退）：完全委托 LlmDelegator 调度渠道/Key/模型切换与重试
+     * @param {Object} client - 初始客户端（委托器首轮复用；后续重建由委托器接管）
+     * @param {Object} userMessage - 用户消息
+     * @param {Object} requestOptions - 请求选项模板
+     * @param {Object} context - 委托上下文 { channel, clientOptions, llmModel, baseSystemPrompt, resolveThinkingOptions, resolveToolChoiceForChannel }
+     * @returns {Promise<{response: Array, usage: Object, reportedModel: string|null, toolLogs: Array}>}
      */
     async _sendWithFallback(client, userMessage, requestOptions, context) {
         const {
@@ -1386,105 +1421,32 @@ chat 组仅限纯问候闲聊（你好/谢谢/再见等）；凡涉及数据获�
         } = context
         const resolveChannelPrompt = targetChannel => resolveChannelSystemPrompt(baseSystemPrompt, targetChannel)
 
-        const fallbackConfig = config.get('llm.fallback') || {}
-        const fallbackEnabled = fallbackConfig.enabled !== false
-        const fallbackModels = fallbackConfig.models || []
-        const maxRetries = fallbackConfig.maxRetries || 3
+        const result = await delegateRequest({
+            userMessage,
+            initialChannel: channel,
+            initialClient: client,
+            initialModel: llmModel,
+            clientBaseOptions: clientOptions,
+            requestOptions,
+            resolveChannelPrompt,
+            resolveThinkingOptions,
+            resolveToolChoiceForChannel,
+            event: requestOptions.event,
+            source: 'chat-agent'
+        })
 
-        const modelsToTry = [llmModel, ...fallbackModels.filter(m => m && m !== llmModel)]
-
-        let response = null
-        let lastError = null
-
-        for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
-            const currentModel = modelsToTry[modelIndex]
-            let retryCount = 0
-            let currentClient = client
-            let currentChannel = channel
-
-            // 备选模型时获取新渠道
-            if (modelIndex > 0) {
-                currentChannel = channelManager.getBestChannel(currentModel)
-                if (currentChannel) {
-                    const keyInfo = channelManager.getChannelKey(currentChannel)
-                    const newClientOptions = {
-                        ...clientOptions,
-                        adapterType: currentChannel.adapterType,
-                        baseUrl: currentChannel.baseUrl,
-                        apiKey: keyInfo.key,
-                        imageConfig: currentChannel.imageConfig || clientOptions.imageConfig,
-                        chatPath: currentChannel.chatPath || '',
-                        modelsPath: currentChannel.modelsPath || '',
-                        responsePath: currentChannel.responsePath || currentChannel.endpoints?.responses || '',
-                        endpoints: currentChannel.endpoints || {},
-                        apiInterface: currentChannel.apiInterface || currentChannel.openaiApiInterface || 'chat',
-                        openaiApiInterface: currentChannel.apiInterface || currentChannel.openaiApiInterface || 'chat',
-                        experimental: currentChannel.experimental || {},
-                        openaiResponses: currentChannel.openaiResponses || {},
-                        customHeaders: currentChannel.customHeaders || {},
-                        headersTemplate: currentChannel.headersTemplate || '',
-                        requestBodyTemplate: currentChannel.requestBodyTemplate || '',
-                        systemPromptConfig: currentChannel.systemPromptConfig || null,
-                        ...resolveThinkingOptions(currentChannel),
-                        toolChoice: resolveToolChoiceForChannel(currentChannel)
-                    }
-                    currentClient = await LlmService.createClient(newClientOptions)
-                }
-            }
-
-            while (retryCount <= maxRetries) {
-                try {
-                    // 应用模型映射
-                    const mapping = currentChannel
-                        ? channelManager.getActualModel(currentChannel.id, currentModel)
-                        : { actualModel: currentModel }
-                    const promptState = resolveChannelPrompt(currentChannel)
-                    const currentRequestOptions = {
-                        ...requestOptions,
-                        ...resolveThinkingOptions(currentChannel),
-                        model: mapping.actualModel,
-                        systemOverride: promptState.systemPrompt,
-                        systemPromptConfig: promptState.systemPromptConfig,
-                        toolChoice: resolveToolChoiceForChannel(currentChannel)
-                    }
-                    response = await currentClient.sendMessage(userMessage, currentRequestOptions)
-
-                    if (response?.contents?.length > 0 || response?.toolCallLogs?.length > 0) {
-                        if (modelIndex > 0) {
-                            logger.info(`[ChatAgent] 使用备选模型成功: ${currentModel}`)
-                        }
-
-                        return {
-                            response: response.contents || [],
-                            usage: response.usage || {},
-                            reportedModel: response.model || null,
-                            toolLogs: response.toolCallLogs || []
-                        }
-                    }
-
-                    retryCount++
-                } catch (error) {
-                    lastError = error
-                    const errorMsg = error?.message || ''
-                    logger.debug(
-                        `[ChatAgent] 模型 ${currentModel} 请求失败（第 ${retryCount + 1}/${maxRetries + 1} 次）:`,
-                        errorMsg
-                    )
-                    retryCount++
-
-                    if (retryCount <= maxRetries) {
-                        const retryDelay = Number(fallbackConfig.retryDelay) || 500
-                        await new Promise(r => setTimeout(r, Math.min(retryDelay * Math.pow(2, retryCount - 1), 10000)))
-                    }
-                }
-            }
-
-            if (!fallbackEnabled) break
+        return {
+            response: result.response?.contents || [],
+            usage: result.response?.usage || {},
+            reportedModel: result.reportedModel || null,
+            toolLogs: result.toolCallLogs || [],
+            usedChannel: result.usedChannel || null,
+            usedModel: result.usedModel || llmModel,
+            fallbackUsed: result.fallbackUsed || false,
+            channelSwitched: result.channelSwitched || false,
+            totalRetryCount: result.totalRetryCount || 0,
+            switchChain: result.switchChain || []
         }
-
-        if (lastError) throw lastError
-
-        return { response: [], usage: {}, toolLogs: [] }
     }
 
     /**
@@ -1555,6 +1517,7 @@ chat 组仅限纯问候闲聊（你好/谢谢/再见等）；凡涉及数据获�
 
     /**
      * 记录统计
+     * @param {Object} options - 统计参数（含委托/未委托模式字段）
      */
     async _recordStats(options) {
         const {
@@ -1567,17 +1530,39 @@ chat 组仅限纯问候闲聊（你好/谢谢/再见等）；凡涉及数据获�
             lastError,
             userId,
             groupId,
-            stream
+            stream,
+            usedChannel,
+            usedModel,
+            fallbackUsed,
+            channelSwitched,
+            totalRetryCount,
+            switchChain,
+            previousChannelId
         } = options
-
         try {
+            const recordedChannel = usedChannel || channel
+            const recordedModel = usedModel || llmModel
+            let formattedSwitchChain = null
+            if (switchChain?.length > 1) {
+                formattedSwitchChain = switchChain.map(s => {
+                    if (s.type === 'init') return `初始: ${s.channel}`
+                    if (s.type === 'key') return `Key切换: ${s.channel} #${s.fromKey}->#${s.toKey} (${s.reason})`
+                    if (s.type === 'channel') return `渠道切换: ${s.from}->${s.to} (${s.reason})`
+                    if (s.type === 'retry') return `重试: ${s.channel} #${s.attempt} (${s.reason})`
+                    if (s.type === 'fallback') return `备选模型: ${s.model} @ ${s.channel} (${s.reason})`
+                    if (s.type === 'exhausted') return `渠道耗尽: ${s.model} (${s.channelsTried}/${s.totalChannels})`
+                    if (s.type === 'success') return `成功: ${s.channel} @ ${s.model}`
+                    return JSON.stringify(s)
+                })
+            }
+
             if (channel) {
                 channelManager.endRequest(channel.id)
                 if (finalUsage) {
-                    channelManager.reportUsage(channel.id, finalUsage.totalTokens || 0)
+                    channelManager.reportUsage(recordedChannel?.id || channel.id, finalUsage.totalTokens || 0)
                 }
                 if (response?.length > 0) {
-                    channelManager.reportSuccess(channel.id)
+                    channelManager.reportSuccess(recordedChannel?.id || channel.id)
                 }
             }
 
@@ -1589,9 +1574,9 @@ chat 组仅限纯问候闲聊（你好/谢谢/再见等）；凡涉及数据获�
                     .join('') || ''
 
             await statsService.recordApiCall({
-                channelId: channel?.id || `no-channel-${llmModel}`,
-                channelName: channel?.name || `无渠道(${llmModel})`,
-                model: llmModel,
+                channelId: recordedChannel?.id || `no-channel-${llmModel}`,
+                channelName: recordedChannel?.name || `无渠道(${llmModel})`,
+                model: recordedModel,
                 reportedModel: upstreamReportedModel,
                 duration: requestDuration,
                 success: !!response?.length,
@@ -1600,6 +1585,11 @@ chat 组仅限纯问候闲聊（你好/谢谢/再见等）；凡涉及数据获�
                 userId,
                 groupId: groupId || null,
                 stream,
+                retryCount: totalRetryCount || 0,
+                channelSwitched: channelSwitched || false,
+                fallbackUsed: fallbackUsed || false,
+                previousChannelId: channelSwitched ? previousChannelId || channel?.id : null,
+                switchChain: formattedSwitchChain,
                 apiUsage: finalUsage,
                 responseText
             })

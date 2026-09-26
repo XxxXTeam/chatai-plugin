@@ -57,4 +57,5 @@ frontend/
 pnpm-lock.yaml
 .eslintcache
 .lsp-mcp/
-test/
+test/*
+!test/llmDelegatorCore.test.js
