@@ -325,6 +325,11 @@ export class MemoryManager {
                 analysisTypes: analysisTypes.join('、') || undefined
             })
 
+            const startTime = Date.now()
+            const memoryModel = config.get('memory.model')
+            const client = await LlmService.getChatClient({ model: memoryModel || undefined })
+            channelInfo = client._channelInfo || {}
+            model = channelInfo.model || config.get('llm.defaultModel')
             const _temp = resolveClientTemperature(client, 0.3)
             const result = await this._sendMemoryLlm(
                 client,
