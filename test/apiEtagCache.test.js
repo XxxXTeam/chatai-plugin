@@ -496,3 +496,164 @@ test('if-none-match 列表形式、强形式与额外空白均可命中弱 ETag'
         await close()
     }
 })
+
+test('子路由挂载（/chatai）下写操作失效同样生效，不因挂载前缀静默失效', async () => {
+    const stores = new Map()
+    // 生产形态：middleware 挂在 express.Router() 上，router 再挂到 /chatai；
+    // req.path 会被剥掉挂载前缀而缓存键保留 originalUrl，前缀坐标不一致时失效会静默失败
+    const app = express()
+    const router = express.Router()
+    router.use(createApiEtagCacheMiddleware({ identityResolver: createIdentityResolver }))
+    router.get('/api/config', (req, res) => res.json({ v: stores.get('v') || 1 }))
+    router.post('/api/config', (req, res) => {
+        stores.set('v', 2)
+        res.json({ ok: true })
+    })
+    app.use('/chatai', router)
+    const { baseUrl, close } = await startTestApp(app)
+    try {
+        const first = await fetch(`${baseUrl}/chatai/api/config`, { headers: { 'x-test-user': 'user-a' } })
+        assert.equal(first.status, 200)
+
+        await fetch(`${baseUrl}/chatai/api/config`, {
+            method: 'POST',
+            headers: { 'x-test-user': 'user-a', 'content-type': 'application/json' },
+            body: '{}'
+        })
+        const stale = await fetch(`${baseUrl}/chatai/api/config`, {
+            headers: { 'x-test-user': 'user-a', 'if-none-match': first.headers.get('etag') }
+        })
+        assert.equal(stale.status, 200, '挂载前缀下写操作后旧 ETag 不得命中 304')
+        assert.deepEqual(await stale.json(), { v: 2 })
+
+        // 正常协商仍应工作：无写操作时携带最新 ETag 命中 304
+        const again = await fetch(`${baseUrl}/chatai/api/config`, {
+            headers: { 'x-test-user': 'user-a', 'if-none-match': stale.headers.get('etag') }
+        })
+        assert.equal(again.status, 304)
+    } finally {
+        await close()
+    }
+})
+
+test('条目达到存活上限（默认 5000ms）后不再命中 304，回落 200 并重写缓存', async () => {
+    const clock = { t: 0 }
+    const counter = { value: 0 }
+    const middleware = createApiEtagCacheMiddleware({
+        identityResolver: createIdentityResolver,
+        now: () => clock.t
+    })
+    const app = express()
+    app.use(middleware)
+    app.get('/api/ttl-default', (req, res) => {
+        counter.value += 1
+        res.json({ n: counter.value })
+    })
+    const { baseUrl, close } = await startTestApp(app)
+    try {
+        const first = await fetch(`${baseUrl}/api/ttl-default`)
+        const etag = first.headers.get('etag')
+        assert.equal(first.status, 200)
+
+        // 存活期内照常命中 304
+        clock.t = 4999
+        const withinTtl = await fetch(`${baseUrl}/api/ttl-default`, { headers: { 'if-none-match': etag } })
+        assert.equal(withinTtl.status, 304, '存活期内应照常命中 304')
+        assert.equal(counter.value, 1)
+
+        // 达到存活上限后过期：携带旧 ETag 也必须回落 200 全量响应
+        clock.t = 5000
+        const expired = await fetch(`${baseUrl}/api/ttl-default`, { headers: { 'if-none-match': etag } })
+        assert.equal(expired.status, 200, '过期条目不得命中 304')
+        assert.equal((await expired.json()).n, 2)
+
+        // 过期后重写缓存：新 ETag 在存活期内恢复协商
+        const etag2 = expired.headers.get('etag')
+        assert.notEqual(etag2, etag)
+        const restored = await fetch(`${baseUrl}/api/ttl-default`, { headers: { 'if-none-match': etag2 } })
+        assert.equal(restored.status, 304)
+    } finally {
+        await close()
+    }
+})
+
+test('304 命中不延长存活期：到期判断以写入时刻为准', async () => {
+    const clock = { t: 0 }
+    const counter = { value: 0 }
+    const middleware = createApiEtagCacheMiddleware({
+        identityResolver: createIdentityResolver,
+        maxAgeMs: 1000,
+        now: () => clock.t
+    })
+    const app = express()
+    app.use(middleware)
+    app.get('/api/ttl-no-renew', (req, res) => {
+        counter.value += 1
+        res.json({ n: counter.value })
+    })
+    const { baseUrl, close } = await startTestApp(app)
+    try {
+        const first = await fetch(`${baseUrl}/api/ttl-no-renew`)
+        const etag = first.headers.get('etag')
+        assert.equal(first.status, 200)
+
+        clock.t = 900
+        const hit = await fetch(`${baseUrl}/api/ttl-no-renew`, { headers: { 'if-none-match': etag } })
+        assert.equal(hit.status, 304)
+
+        clock.t = 1000
+        const afterTtl = await fetch(`${baseUrl}/api/ttl-no-renew`, { headers: { 'if-none-match': etag } })
+        assert.equal(afterTtl.status, 200, '304 命中不得为条目续期')
+        assert.equal(counter.value, 2)
+    } finally {
+        await close()
+    }
+})
+
+test('跳过前缀（默认 /api/stats）不参与协商缓存，每次请求都执行路由', async () => {
+    const counter = { value: 0 }
+    const middleware = createApiEtagCacheMiddleware({ identityResolver: createIdentityResolver })
+    const app = express()
+    app.use(middleware)
+    app.get('/api/stats', (req, res) => {
+        counter.value += 1
+        res.json({ n: counter.value })
+    })
+    app.get('/api/stats/usage', (req, res) => {
+        counter.value += 1
+        res.json({ n: counter.value })
+    })
+    app.get('/api/stats-extra', (req, res) => {
+        counter.value += 1
+        res.json({ n: counter.value })
+    })
+    const { baseUrl, close } = await startTestApp(app)
+    try {
+        const rootFirst = await fetch(`${baseUrl}/api/stats`)
+        assert.equal(rootFirst.status, 200)
+        assert.equal(rootFirst.headers.get('cache-control'), null, '前缀精确匹配也应跳过')
+
+        const first = await fetch(`${baseUrl}/api/stats/usage`)
+        assert.equal(first.status, 200)
+        assert.equal((await first.json()).n, 2)
+        assert.equal(first.headers.get('cache-control'), null, '跳过前缀不得写入本模块缓存头')
+
+        // 携带 if-none-match 也必须重新执行路由拿最新数据
+        const second = await fetch(`${baseUrl}/api/stats/usage`, {
+            headers: { 'if-none-match': 'W/"irrelevant"' }
+        })
+        assert.equal(second.status, 200)
+        assert.equal((await second.json()).n, 3, '统计类接口每次请求都应重新渲染最新数据')
+
+        // 边界：仅匹配前缀本身或其子路径，不误伤同前缀开头的其它资源
+        const extraFirst = await fetch(`${baseUrl}/api/stats-extra`)
+        assert.equal(extraFirst.status, 200)
+        assert.equal(extraFirst.headers.get('cache-control'), 'private, max-age=0, must-revalidate')
+        const extraSecond = await fetch(`${baseUrl}/api/stats-extra`, {
+            headers: { 'if-none-match': extraFirst.headers.get('etag') }
+        })
+        assert.equal(extraSecond.status, 304, '非跳过路径仍应参与协商缓存')
+    } finally {
+        await close()
+    }
+})

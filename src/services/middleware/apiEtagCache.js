@@ -16,6 +16,22 @@ const ETAG_HASH_LENGTH = 16
 const DEFAULT_PATH_PREFIX = '/api'
 
 /**
+ * 条目默认存活上限（毫秒）。
+ * 机器人/后台等非 HTTP 写路径（聊天统计、日志、记忆、知识图谱等）无法触发按前缀失效，
+ * 条目达到存活上限后一律按未命中处理，保证面板数据最多滞后该时长；304 命中不续期。
+ * @constant {number}
+ */
+const DEFAULT_MAX_AGE_MS = 5000
+
+/**
+ * 默认跳过的路径前缀（不参与协商缓存）。
+ * 统计类接口由机器人聊天/后台任务持续写入、且写入不经过 HTTP 写操作，
+ * 每次读取都直接放行到路由以拿到最新数据。
+ * @constant {string[]}
+ */
+const DEFAULT_SKIP_PREFIXES = ['/api/stats']
+
+/**
  * 标记 res.json 是否已被本模块包装的内部符号。
  * 同一响应对象只会被包装一次，避免中间件重复挂载时出现多层包装。
  * @type {symbol}
@@ -35,6 +51,9 @@ let activeCache = null
  * @property {number} [limit]
  * @property {number} [maxBytes]
  * @property {string} [pathPrefix]
+ * @property {number} [maxAgeMs]
+ * @property {string[]} [skipPrefixes]
+ * @property {() => number} [now]
  * @property {(req: import('express').Request) => string | null | undefined} [identityResolver]
  */
 
@@ -55,6 +74,10 @@ let activeCache = null
  * 队首即最久未使用。条数上限与字节上限按 body 序列化后的 UTF-8 字节数估算，
  * 超出任一上限时从最久未使用条目开始逐出。
  *
+ * 存活期与跳过：条目自写入起最多保留 maxAgeMs（默认 5000ms），到期按未命中处理；
+ * 路径命中 skipPrefixes（默认 /api/stats）的请求完全不走本缓存。
+ * 两者共同兜底机器人/后台等不经过 HTTP 写操作的更新来源。
+ *
  * 生命周期：纯内存 Map，服务重启或热更新后自然失效，
  * 不影响正确性，仅丢失协商缓存命中率。
  */
@@ -67,33 +90,57 @@ class ApiEtagCache {
         this.map = new Map()
         this.totalBytes = 0
         this.pathPrefix = options.pathPrefix ?? DEFAULT_PATH_PREFIX
+        this.maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS
+        // 时间源可注入（测试用假时钟）；生产环境使用 Date.now
+        this.now = typeof options.now === 'function' ? options.now : Date.now
     }
 
     /**
-     * 读取条目并把该条目移到 LRU 队尾（视作最近使用）
+     * 判断条目是否达到存活上限（达到 maxAgeMs 即视为过期）
+     * @param {{ storedAt: number }} entry - 缓存条目
+     * @returns {boolean}
+     */
+    _isExpired(entry) {
+        return this.now() - entry.storedAt >= this.maxAgeMs
+    }
+
+    /**
+     * 读取条目并把该条目移到 LRU 队尾（视作最近使用）。
+     * 达到存活上限的条目会被移除并按未命中处理。
      * @param {string} key - 缓存键
-     * @returns {{ etag: string, size: number }|undefined} 命中的条目，未命中返回 undefined
+     * @returns {{ etag: string, size: number, storedAt: number }|undefined} 命中的条目；未命中或已过期返回 undefined
      */
     get(key) {
         const entry = this.map.get(key)
         if (!entry) return undefined
+        if (this._isExpired(entry)) {
+            this.delete(key)
+            return undefined
+        }
         this.map.delete(key)
         this.map.set(key, entry)
         return entry
     }
 
     /**
-     * 判断键是否存在（不改动 LRU 顺序）
+     * 判断键是否存在且未过期（不改动 LRU 顺序）
      * @param {string} key - 缓存键
      * @returns {boolean}
      */
     has(key) {
-        return this.map.has(key)
+        const entry = this.map.get(key)
+        if (!entry) return false
+        if (this._isExpired(entry)) {
+            this.delete(key)
+            return false
+        }
+        return true
     }
 
     /**
      * 写入条目并执行容量逐出。
      * 超出条目数或字节上限时按 LRU 顺序（最旧优先）逐出，逐出事件记 info 日志。
+     * 写入时间参与存活期判断（见 _isExpired）。
      * @param {string} key - 缓存键
      * @param {string} etag - 弱 ETag 值
      * @param {number} size - body 序列化后的 UTF-8 字节数
@@ -105,7 +152,7 @@ class ApiEtagCache {
             this.totalBytes -= previous.size
             this.map.delete(key)
         }
-        this.map.set(key, { etag, size })
+        this.map.set(key, { etag, size, storedAt: this.now() })
         this.totalBytes += size
 
         const removed = []
@@ -273,8 +320,12 @@ function briefKey(identity, originalUrl) {
  * - 身份分桶：缓存键为 `${identity}\u0000${req.originalUrl}`。identity 由 options.identityResolver
  *   从请求中解析（生产接法解析 authMiddleware 填到 req.user 的 JWT payload 的 jti 字段），
  *   不同登录会话完全隔离，304 不会跨身份命中；解析结果为 undefined/null 时回落匿名桶。
- * - 命中：请求头 if-none-match 等于缓存弱 ETag 时直接 res.status(304).end() 结束，
+ * - 命中：请求头 if-none-match 与缓存弱 ETag 匹配（含列表形式与弱/强前缀）时直接 res.status(304).end() 结束，
  *   不执行路由、不产生响应体与 Set-Cookie，并补写 ETag 与 Cache-Control 头。
+ * - 跳过：路径命中 options.skipPrefixes（默认 ['/api/stats']）的请求不参与本模块缓存，
+ *   直接放行到路由，保证持续写入型接口每次读取都是最新数据。
+ * - 过期：条目自写入起达到 options.maxAgeMs（默认 5000ms）即按未命中处理，
+ *   回落完整路由并重写缓存，兜底机器人/后台等不经过 HTTP 写操作的数据更新；304 命中不延长存活期。
  * - 写回：包装 res.json，在调用前把序列化 body 计算弱 ETag 并写入缓存，
  *   同时设置 ETag 与 `Cache-Control: private, max-age=0, must-revalidate`（协商复用语义）。
  *   res.send / res.sendFile / res.end 等其它结束方式一律不参与缓存。
@@ -289,6 +340,9 @@ function briefKey(identity, originalUrl) {
  * @param {number} [options.limit=512] - 最大条目数
  * @param {number} [options.maxBytes=16777216] - body 估算总字节上限（默认 16MB）
  * @param {string} [options.pathPrefix='/api'] - 参与缓存的路径前缀
+ * @param {number} [options.maxAgeMs=5000] - 条目存活上限（毫秒），到期按未命中处理
+ * @param {string[]} [options.skipPrefixes=['/api/stats']] - 直接跳过的路径前缀（不参与协商缓存）
+ * @param {() => number} [options.now] - 时间源，供测试注入；缺省使用 Date.now
  * @param {(req: import('express').Request) => string | null | undefined} [options.identityResolver]
  *   身份解析器。缺省时从 req.user.jti 提取（见 webServer.js 的 authMiddleware），
  *   取不到则回落为空字符串（匿名桶）
@@ -307,17 +361,30 @@ export function createApiEtagCacheMiddleware(options = {}) {
         typeof mergedOptions.identityResolver === 'function'
             ? mergedOptions.identityResolver
             : req => req.user?.jti ?? ''
+    const skipPrefixes = (
+        Array.isArray(mergedOptions.skipPrefixes) ? mergedOptions.skipPrefixes : DEFAULT_SKIP_PREFIXES
+    )
+        .map(prefix => String(prefix).replace(/\/+$/, ''))
+        .filter(Boolean)
 
     return function apiEtagCacheMiddleware(req, res, next) {
+        // 跳过前缀（默认 /api/stats）：等于该前缀或其子路径的请求直接放行，不走任何缓存逻辑
+        if (skipPrefixes.some(prefix => req.path === prefix || req.path.startsWith(prefix + '/'))) return next()
+
         /*
          * 非 GET 且路径带 /api 的写操作（POST/PUT/PATCH/DELETE）通过时，
          * 按「身份 + 站点资源前缀」失效对应 GET 缓存条目。
          * 前缀取到 originalUrl 的 /api 段结束（含下一路径段边界，
          * 如 /api/channels），保证同资源的列表/详情/统计一并刷新。
+         *
+         * 注意前缀必须与缓存键同坐标：键是含挂载前缀的 originalUrl（如 /chatai/api/...），
+         * 而 req.path 已被 Express 剥掉挂载前缀（/api/...）。直接用 req.path 会导致
+         * deletePrefix 永远匹配不到键——写操作后旧 ETag 继续命中 304，前端表现为「访问过即冻结」。
          */
         if (req.method !== 'GET' && req.path.startsWith(cache.pathPrefix)) {
             const identity = identityResolver(req) ?? ''
-            const sitePrefix = String(req.path).match(/^(\/api(?:\/[^/]+)?)/)?.[1] || cache.pathPrefix
+            const urlPath = String(req.originalUrl).split('?')[0]
+            const sitePrefix = urlPath.match(/^(.*?\/api(?:\/[^/]+)?)/)?.[1] || cache.pathPrefix
             const fullPrefix = `${identity}\u0000${sitePrefix}`
             cache.deletePrefix(fullPrefix)
         }
@@ -327,15 +394,14 @@ export function createApiEtagCacheMiddleware(options = {}) {
         const identity = identityResolver(req) ?? ''
         const key = `${identity}\u0000${req.originalUrl}`
 
-        if (cache.has(key)) {
-            const entry = cache.get(key)
-            if (ifNoneMatchHits(req.headers['if-none-match'], entry.etag)) {
-                res.setHeader('ETag', entry.etag)
-                res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate')
-                chatLogger.debug('ApiETag', `[ETag缓存] 命中 304 - ${briefKey(identity, req.originalUrl)}`)
-                res.status(304).end()
-                return
-            }
+        // get() 会顺带清理过期条目并返回 undefined，此时按未命中处理，回落完整路由并重写缓存
+        const entry = cache.get(key)
+        if (entry && ifNoneMatchHits(req.headers['if-none-match'], entry.etag)) {
+            res.setHeader('ETag', entry.etag)
+            res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate')
+            chatLogger.debug('ApiETag', `[ETag缓存] 命中 304 - ${briefKey(identity, req.originalUrl)}`)
+            res.status(304).end()
+            return
         }
 
         // 响应体随 Accept-Encoding 变化，按规矩宣告协商维度（追加语义，不覆盖既有 Vary）
