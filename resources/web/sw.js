@@ -1,17 +1,18 @@
 /* eslint-disable */
 
-const BUILD_VERSION = '3ed1457c6001'
+const BUILD_VERSION = '2024d3c9a45d'
 const CACHE_NAME = 'chatai-assets-' + BUILD_VERSION
 const BASE = '/chatai'
 const PRECACHE = [
+    "/chatai/_next/static/chunks/0f962455b685c7a1.js",
     "/chatai/_next/static/chunks/1cbccc39b319e66a.js",
     "/chatai/_next/static/chunks/1de6a45627b906d0.js",
     "/chatai/_next/static/chunks/2859f476bcae8cb4.js",
+    "/chatai/_next/static/chunks/306dd29d1a6e4431.js",
     "/chatai/_next/static/chunks/3365a731e1703f0c.js",
     "/chatai/_next/static/chunks/385a773366f255d8.js",
-    "/chatai/_next/static/chunks/3bd2124b8d9ee298.js",
-    "/chatai/_next/static/chunks/3da0694bd9a318a7.js",
     "/chatai/_next/static/chunks/3f1b44f91f087274.js",
+    "/chatai/_next/static/chunks/46bb0c831170aec1.js",
     "/chatai/_next/static/chunks/49c18f8b59454c9c.js",
     "/chatai/_next/static/chunks/5360380437a526d4.js",
     "/chatai/_next/static/chunks/5601c55d3f433fb5.js",
@@ -31,6 +32,7 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/6eedc3d04ad97761.js",
     "/chatai/_next/static/chunks/70a46ec71ad97ee4.js",
     "/chatai/_next/static/chunks/74fd1dedd7163973.js",
+    "/chatai/_next/static/chunks/76e68797a1c75ff8.js",
     "/chatai/_next/static/chunks/7be36e6ca4e90dfa.js",
     "/chatai/_next/static/chunks/7d9c0e5cf15ff6b1.js",
     "/chatai/_next/static/chunks/8684f1dab52aa687.js",
@@ -47,7 +49,6 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/af1264b170dd3b20.js",
     "/chatai/_next/static/chunks/b02c749caf088e45.js",
     "/chatai/_next/static/chunks/ba9ccc7bcdd48e75.js",
-    "/chatai/_next/static/chunks/baf7dc3d204fed26.js",
     "/chatai/_next/static/chunks/bd7e4b9e3aa192a7.js",
     "/chatai/_next/static/chunks/c06955e2755ede11.js",
     "/chatai/_next/static/chunks/c2fba871b679a3d4.js",
@@ -69,16 +70,15 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/f3807185e2d607e6.js",
     "/chatai/_next/static/chunks/f395d4077dbc6386.js",
     "/chatai/_next/static/chunks/f4930e62852e0ba5.js",
-    "/chatai/_next/static/chunks/fb1c05d6491fbd81.js",
     "/chatai/_next/static/chunks/fb8bbad83c699e17.js",
     "/chatai/_next/static/chunks/fe1d7cc77c315304.js",
     "/chatai/_next/static/chunks/fef25a02b5243842.js",
     "/chatai/_next/static/chunks/ff1a16fafef87110.js",
     "/chatai/_next/static/chunks/turbopack-116fa6931d85daf2.js",
     "/chatai/_next/static/media/favicon.0b3bf435.ico",
-    "/chatai/_next/static/wz9GYsHLehI8x9mLVhvxV/_buildManifest.js",
-    "/chatai/_next/static/wz9GYsHLehI8x9mLVhvxV/_clientMiddlewareManifest.json",
-    "/chatai/_next/static/wz9GYsHLehI8x9mLVhvxV/_ssgManifest.js",
+    "/chatai/_next/static/unPNlE7HQG20Z7n-hrXUl/_buildManifest.js",
+    "/chatai/_next/static/unPNlE7HQG20Z7n-hrXUl/_clientMiddlewareManifest.json",
+    "/chatai/_next/static/unPNlE7HQG20Z7n-hrXUl/_ssgManifest.js",
     "/chatai/favicon.ico",
     "/chatai/file.svg",
     "/chatai/globe.svg",
