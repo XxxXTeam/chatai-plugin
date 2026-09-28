@@ -1,11 +1,10 @@
 /* eslint-disable */
 
-const BUILD_VERSION = 'f903e89ce82e'
+const BUILD_VERSION = '6558550c5077'
 const CACHE_NAME = 'chatai-assets-' + BUILD_VERSION
 const BASE = '/chatai'
 const PRECACHE = [
     "/chatai/_next/static/chunks/0f962455b685c7a1.js",
-    "/chatai/_next/static/chunks/18ef6c797736e5a1.js",
     "/chatai/_next/static/chunks/1b0cc0d505519e40.js",
     "/chatai/_next/static/chunks/1cbccc39b319e66a.js",
     "/chatai/_next/static/chunks/1de6a45627b906d0.js",
@@ -21,10 +20,10 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/5601c55d3f433fb5.js",
     "/chatai/_next/static/chunks/565910b1126e4102.js",
     "/chatai/_next/static/chunks/5928a4ead036b4d4.js",
-    "/chatai/_next/static/chunks/59b791bccde94b35.css",
     "/chatai/_next/static/chunks/59dc0458b01adbb4.js",
     "/chatai/_next/static/chunks/5a477585a9172e32.js",
     "/chatai/_next/static/chunks/5ac6523a1e84b470.js",
+    "/chatai/_next/static/chunks/5bb4fcf3f5fbb2a3.css",
     "/chatai/_next/static/chunks/5f5dc4b91b5fa8cb.js",
     "/chatai/_next/static/chunks/605036bceda22f7e.js",
     "/chatai/_next/static/chunks/6283992fb1af450c.js",
@@ -61,6 +60,7 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/d1800f46f072bd73.js",
     "/chatai/_next/static/chunks/d434cc25d150bf3e.js",
     "/chatai/_next/static/chunks/d4edc9cb04363b93.js",
+    "/chatai/_next/static/chunks/d5c1fcd86776988f.js",
     "/chatai/_next/static/chunks/d5d8c8c785200296.js",
     "/chatai/_next/static/chunks/d7d7e238f8cdc451.js",
     "/chatai/_next/static/chunks/d93b9117fb66b228.js",
@@ -76,9 +76,9 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/ff1a16fafef87110.js",
     "/chatai/_next/static/chunks/turbopack-116fa6931d85daf2.js",
     "/chatai/_next/static/media/favicon.0b3bf435.ico",
-    "/chatai/_next/static/qK7jvDzRUbNtyveW3yKLp/_buildManifest.js",
-    "/chatai/_next/static/qK7jvDzRUbNtyveW3yKLp/_clientMiddlewareManifest.json",
-    "/chatai/_next/static/qK7jvDzRUbNtyveW3yKLp/_ssgManifest.js",
+    "/chatai/_next/static/uS45xmoOxf0CosnsI14gF/_buildManifest.js",
+    "/chatai/_next/static/uS45xmoOxf0CosnsI14gF/_clientMiddlewareManifest.json",
+    "/chatai/_next/static/uS45xmoOxf0CosnsI14gF/_ssgManifest.js",
     "/chatai/favicon.ico",
     "/chatai/file.svg",
     "/chatai/globe.svg",
