@@ -1,6 +1,6 @@
 /* eslint-disable */
 
-const BUILD_VERSION = '6558550c5077'
+const BUILD_VERSION = '1baa2578a341'
 const CACHE_NAME = 'chatai-assets-' + BUILD_VERSION
 const BASE = '/chatai'
 const PRECACHE = [
@@ -15,8 +15,8 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/391971540d079569.js",
     "/chatai/_next/static/chunks/3f1b44f91f087274.js",
     "/chatai/_next/static/chunks/46bb0c831170aec1.js",
+    "/chatai/_next/static/chunks/48632ded6a8cefb9.js",
     "/chatai/_next/static/chunks/51c012be8916aeb2.js",
-    "/chatai/_next/static/chunks/5360380437a526d4.js",
     "/chatai/_next/static/chunks/5601c55d3f433fb5.js",
     "/chatai/_next/static/chunks/565910b1126e4102.js",
     "/chatai/_next/static/chunks/5928a4ead036b4d4.js",
@@ -76,9 +76,9 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/ff1a16fafef87110.js",
     "/chatai/_next/static/chunks/turbopack-116fa6931d85daf2.js",
     "/chatai/_next/static/media/favicon.0b3bf435.ico",
-    "/chatai/_next/static/uS45xmoOxf0CosnsI14gF/_buildManifest.js",
-    "/chatai/_next/static/uS45xmoOxf0CosnsI14gF/_clientMiddlewareManifest.json",
-    "/chatai/_next/static/uS45xmoOxf0CosnsI14gF/_ssgManifest.js",
+    "/chatai/_next/static/ugvvM3wT2Dmc5hiCToL_6/_buildManifest.js",
+    "/chatai/_next/static/ugvvM3wT2Dmc5hiCToL_6/_clientMiddlewareManifest.json",
+    "/chatai/_next/static/ugvvM3wT2Dmc5hiCToL_6/_ssgManifest.js",
     "/chatai/favicon.ico",
     "/chatai/file.svg",
     "/chatai/globe.svg",
