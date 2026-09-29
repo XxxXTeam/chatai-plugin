@@ -349,7 +349,7 @@ export function parseEssenceEvent(e) {
 export function parseAdminChangeEvent(e) {
     return {
         userId: e.user_id || e.target_id,
-        isSet: e.sub_type === 'set' || e.action === 'set',
+        isSet: e.set === true || e.sub_type === 'set' || e.action === 'set',
         groupId: e.group_id
     }
 }

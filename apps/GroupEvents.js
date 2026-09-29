@@ -328,6 +328,7 @@ let eventListenersRegistered = false
  * 统一事件处理器
  */
 async function handleGroupEvent(eventType, e, bot) {
+    bot = e?.bot || bot
     if (!shouldProcessEvent(e)) return
 
     const configKey = `features.${eventType}.enabled`
@@ -454,14 +455,15 @@ async function handleGroupEvent(eventType, e, bot) {
 
         case 'admin':
             if (!botIds.has(String(userId))) return
-            if (e.sub_type === 'set') {
+            const isAdminSet = e.set === true || e.sub_type === 'set' || e.action === 'set'
+            if (isAdminSet) {
                 data.action = '被设置成了群管理员'
                 data.sub_type = 'set'
             } else {
                 data.action = '的管理员身份被取消了'
                 data.sub_type = 'unset'
             }
-            logger.info(`[AI-${eventType}] 机器人${e.sub_type === 'set' ? '成为' : '取消'}管理员`)
+            logger.info(`[AI-${eventType}] 机器人${isAdminSet ? '成为' : '取消'}管理员`)
             break
 
         case 'luckyKing':
