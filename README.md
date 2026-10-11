@@ -1274,6 +1274,12 @@ git commit -m "docs: 更新安装说明"
         <img src="https://github.com/rufengOwO.png" width="80px;" alt="rufengOwO"/><br/>
         <sub><b>rufengOwO</b></sub>
       </a>
+        <tr>
+    <td align="center">
+      <a href="https://github.com/HHXXYY123">
+        <img src="https://github.com/HHXXYY123.png" width="80px;" alt="HHXXYY123"/><br/>
+        <sub><b>HHXXYY123</b></sub>
+      </a>
     </td>
     <td align="center">
       <a href="https://github.com/3577641236">
