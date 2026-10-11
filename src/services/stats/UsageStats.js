@@ -310,60 +310,150 @@ class UsageStats {
     }
 
     /**
-     * 获取最近的使用记录
+     * 获取最近的使用记录（筛选后取第一页）
      * @param {number} limit
      * @param {Object} filter
      */
     async getRecent(limit = 50, filter = {}) {
-        let records = []
+        const result = await this.getRecentPaged(1, limit, filter)
+        return result.records
+    }
 
-        try {
-            const rawRecords = await redisClient.lrange(STATS_LIST_KEY, 0, limit * 2)
-            records = rawRecords
-                .map(r => {
+    /**
+     * 获取使用记录分页结果。
+     * 无筛选时只读取 Redis 当前页，带筛选时读取最多 MAX_RECORDS 条后再筛选，
+     * 避免来源、状态、时间筛选只作用于未筛选的前几条记录。
+     * @param {number|Object} pageOrOptions - 页码，或 { page, limit, filter }
+     * @param {number} limitArg - 每页数量
+     * @param {Object} filterArg - 筛选条件
+     * @returns {Promise<{records: UsageRecord[], pagination: Object}>}
+     */
+    async getRecentPaged(pageOrOptions = 1, limitArg = 100, filterArg = {}) {
+        let pageValue = pageOrOptions
+        let limitValue = limitArg
+        let filter = filterArg
+
+        if (pageOrOptions && typeof pageOrOptions === 'object' && !Array.isArray(pageOrOptions)) {
+            const { page, limit, filter: optionFilter, ...filterOptions } = pageOrOptions
+            pageValue = page
+            limitValue = limit
+            filter = optionFilter || filterOptions
+        }
+
+        const pageNumber = Number(pageValue)
+        const limitNumber = Number(limitValue)
+        const page = Number.isFinite(pageNumber) && pageNumber >= 1 ? Math.floor(pageNumber) : 1
+        const limit =
+            Number.isFinite(limitNumber) && limitNumber >= 1 ? Math.min(Math.floor(limitNumber), MAX_RECORDS) : 100
+        const safeFilter = filter && typeof filter === 'object' ? filter : {}
+        const hasValue = value => value !== undefined && value !== null && value !== ''
+        const parseTime = value => {
+            if (!hasValue(value) || (typeof value === 'string' && value.trim() === '')) return undefined
+            const numeric = Number(value)
+            return Number.isFinite(numeric) ? numeric : undefined
+        }
+        const startTime = parseTime(safeFilter.startTime)
+        const endTime = parseTime(safeFilter.endTime)
+        const hasFilters =
+            ['channelId', 'model', 'success', 'source'].some(key => hasValue(safeFilter[key])) ||
+            startTime !== undefined ||
+            endTime !== undefined
+        const parseRecords = rawRecords =>
+            (Array.isArray(rawRecords) ? rawRecords : [])
+                .map(raw => {
                     try {
-                        return JSON.parse(r)
+                        return typeof raw === 'string' ? JSON.parse(raw) : raw
                     } catch {
                         return null
                     }
                 })
-                .filter(Boolean)
-        } catch {
-            records = [...this.recentStats]
-        }
-
-        // 应用过滤器
-        if (filter.channelId) {
-            records = records.filter(r => r.channelId === filter.channelId)
-        }
-        if (filter.model) {
-            records = records.filter(r => r.model === filter.model)
-        }
-        if (filter.success !== undefined) {
-            records = records.filter(r => r.success === filter.success)
-        }
-        if (filter.source) {
-            const sourceAliases = {
-                memory_group: ['memory_group', '群记忆总结', '群记忆', '时间段记忆总结'],
-                memory_user: ['memory_user', '记忆总结', '用户记忆'],
-                memory_extract: ['memory_extract', '记忆提取'],
-                群记忆: ['memory_group', '群记忆总结', '群记忆', '时间段记忆总结'],
-                群记忆总结: ['memory_group', '群记忆总结', '群记忆', '时间段记忆总结'],
-                用户记忆: ['memory_user', '记忆总结', '用户记忆'],
-                记忆总结: ['memory_user', '记忆总结', '用户记忆'],
-                记忆提取: ['memory_extract', '记忆提取']
+                .filter(record => record && typeof record === 'object')
+        const applyFilters = input => {
+            let records = input
+            if (hasValue(safeFilter.channelId)) {
+                records = records.filter(record => record.channelId === safeFilter.channelId)
             }
-            const allowedSources = sourceAliases[filter.source] || [filter.source]
-            records = records.filter(r => allowedSources.includes(r.source))
-        }
-        if (filter.startTime) {
-            records = records.filter(r => r.timestamp >= filter.startTime)
-        }
-        if (filter.endTime) {
-            records = records.filter(r => r.timestamp <= filter.endTime)
+            if (hasValue(safeFilter.model)) {
+                records = records.filter(record => record.model === safeFilter.model)
+            }
+            if (safeFilter.success !== undefined && safeFilter.success !== null && safeFilter.success !== '') {
+                records = records.filter(record => record.success === safeFilter.success)
+            }
+            if (hasValue(safeFilter.source)) {
+                const sourceAliases = {
+                    memory_group: ['memory_group', '群记忆总结', '群记忆', '时间段记忆总结'],
+                    memory_user: ['memory_user', '记忆总结', '用户记忆'],
+                    memory_extract: ['memory_extract', '记忆提取'],
+                    群记忆: ['memory_group', '群记忆总结', '群记忆', '时间段记忆总结'],
+                    群记忆总结: ['memory_group', '群记忆总结', '群记忆', '时间段记忆总结'],
+                    用户记忆: ['memory_user', '记忆总结', '用户记忆'],
+                    记忆总结: ['memory_user', '记忆总结', '用户记忆'],
+                    记忆提取: ['memory_extract', '记忆提取']
+                }
+                const allowedSources = sourceAliases[safeFilter.source] || [safeFilter.source]
+                records = records.filter(record => allowedSources.includes(record.source))
+            }
+            if (startTime !== undefined) {
+                records = records.filter(record => record.timestamp >= startTime)
+            }
+            if (endTime !== undefined) {
+                records = records.filter(record => record.timestamp <= endTime)
+            }
+            return records
         }
 
-        return records.slice(0, limit)
+        const start = (page - 1) * limit
+        let records
+        let total
+        try {
+            if (!hasFilters) {
+                total = Number(await redisClient.llen(STATS_LIST_KEY))
+                if (!Number.isFinite(total) || total < 0) throw new Error('Redis返回了无效的记录总数')
+                const rawRecords =
+                    total > start ? await redisClient.lrange(STATS_LIST_KEY, start, start + limit - 1) : []
+                records = parseRecords(rawRecords)
+                if (redisClient.isConnected === false && total > start && rawRecords.length === 0) {
+                    records = applyFilters([...this.recentStats])
+                    total = records.length
+                    records = records.slice(start, start + limit)
+                } else if (records.length < rawRecords.length) {
+                    // 当前页存在坏记录时，扩大读取窗口以重新统计有效记录总数。
+                    const allRawRecords = await redisClient.lrange(STATS_LIST_KEY, 0, MAX_RECORDS - 1)
+                    const validRecords = parseRecords(allRawRecords)
+                    total = validRecords.length
+                    records = validRecords.slice(start, start + limit)
+                } else if (total === 0 && this.recentStats.length > 0) {
+                    records = applyFilters([...this.recentStats])
+                    total = records.length
+                    records = records.slice(start, start + limit)
+                }
+            } else {
+                const rawRecords = await redisClient.lrange(STATS_LIST_KEY, 0, MAX_RECORDS - 1)
+                records = applyFilters(parseRecords(rawRecords))
+                if (rawRecords.length === 0 && this.recentStats.length > 0) {
+                    records = applyFilters([...this.recentStats])
+                }
+                total = records.length
+                records = records.slice(start, start + limit)
+            }
+        } catch (error) {
+            logger.debug('[UsageStats] 分页读取Redis失败，改用内存缓存:', error.message)
+            records = applyFilters([...this.recentStats])
+            total = records.length
+            records = records.slice(start, start + limit)
+        }
+
+        const totalPages = total > 0 ? Math.ceil(total / limit) : 0
+        return {
+            records,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages,
+                hasMore: page < totalPages
+            }
+        }
     }
 
     /**

@@ -7,6 +7,12 @@ import { chatLogger } from '../../core/utils/logger.js'
 
 const router = express.Router()
 
+function parseOptionalTimestamp(value) {
+    if (value === undefined || value === null || value === '') return undefined
+    const parsed = parseInt(value)
+    return Number.isFinite(parsed) ? parsed : undefined
+}
+
 // GET /api/stats - 概览统计（兼容旧路径）
 // GET /api/stats/overview - 概览统计
 const handleOverview = async (req, res) => {
@@ -29,14 +35,16 @@ router.get('/overview', handleOverview)
 // GET /api/stats/api-calls
 router.get('/api-calls', async (req, res) => {
     try {
-        const { page = 1, limit = 20, channelId, success, startTime, endTime } = req.query
+        const { page = 1, limit = 20, channelId, model, source, success, startTime, endTime } = req.query
         const stats = await statsService.getApiCalls({
             page: parseInt(page),
             limit: parseInt(limit),
             channelId,
+            model,
+            source,
             success: success === 'true' ? true : success === 'false' ? false : undefined,
-            startTime: startTime ? parseInt(startTime) : undefined,
-            endTime: endTime ? parseInt(endTime) : undefined
+            startTime: parseOptionalTimestamp(startTime),
+            endTime: parseOptionalTimestamp(endTime)
         })
         res.json(ApiResponse.ok(stats))
     } catch (error) {
@@ -79,13 +87,24 @@ router.get('/usage', async (req, res) => {
 // GET /api/stats/usage/recent - 获取最近的使用记录
 router.get('/usage/recent', async (req, res) => {
     try {
-        const { limit = 50, source, status } = req.query
+        const { limit = 100, source, status, channelId, model, startTime, endTime } = req.query
         const filter = {}
         if (source) filter.source = source
+        if (channelId) filter.channelId = channelId
+        if (model) filter.model = model
         if (status === 'success') filter.success = true
         else if (status === 'failed') filter.success = false
-        const records = await usageStats.getRecent(parseInt(limit) || 50, filter)
-        res.json(ApiResponse.ok(records))
+        const parsedStartTime = parseOptionalTimestamp(startTime)
+        const parsedEndTime = parseOptionalTimestamp(endTime)
+        if (parsedStartTime !== undefined) filter.startTime = parsedStartTime
+        if (parsedEndTime !== undefined) filter.endTime = parsedEndTime
+
+        const hasPage = Object.prototype.hasOwnProperty.call(req.query, 'page')
+        const page = hasPage ? parseInt(req.query.page) : 1
+        const result = hasPage
+            ? await usageStats.getRecentPaged(page, parseInt(limit), filter)
+            : await usageStats.getRecent(parseInt(limit), filter)
+        res.json(ApiResponse.ok(result))
     } catch (error) {
         res.status(500).json(ApiResponse.fail(null, error.message))
     }
