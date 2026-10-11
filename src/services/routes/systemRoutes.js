@@ -8,6 +8,12 @@ import { isMaster } from '../../utils/platformAdapter.js'
 
 const router = express.Router()
 
+function parseOptionalTimestamp(value) {
+    if (value === undefined || value === null || value === '') return undefined
+    const parsed = parseInt(value)
+    return Number.isFinite(parsed) ? parsed : undefined
+}
+
 function isLocalRequest(req) {
     const remoteAddress = req.socket?.remoteAddress || req.ip || ''
     const normalized = remoteAddress.replace(/^::ffff:/, '')
@@ -280,15 +286,26 @@ router.get('/stats/usage', async (req, res) => {
 router.get('/stats/usage/recent', async (req, res) => {
     try {
         const { usageStats } = await import('../stats/UsageStats.js')
-        const { limit = 100, channelId, model, success, status, source } = req.query
+        const { limit = 100, channelId, model, success, status, source, startTime, endTime } = req.query
         const filter = {}
         if (channelId) filter.channelId = channelId
         if (model) filter.model = model
-        if (success !== undefined) filter.success = success === 'true'
-        else if (status !== undefined) filter.success = status === 'success'
+        if (success === 'true') filter.success = true
+        else if (success === 'false') filter.success = false
+        else if (status === 'success') filter.success = true
+        else if (status === 'failed') filter.success = false
         if (source) filter.source = source
-        const records = await usageStats.getRecent(parseInt(limit), filter)
-        res.json(ChaiteResponse.ok(records))
+        const parsedStartTime = parseOptionalTimestamp(startTime)
+        const parsedEndTime = parseOptionalTimestamp(endTime)
+        if (parsedStartTime !== undefined) filter.startTime = parsedStartTime
+        if (parsedEndTime !== undefined) filter.endTime = parsedEndTime
+
+        const hasPage = Object.prototype.hasOwnProperty.call(req.query, 'page')
+        const page = hasPage ? parseInt(req.query.page) : 1
+        const result = hasPage
+            ? await usageStats.getRecentPaged(page, parseInt(limit), filter)
+            : await usageStats.getRecent(parseInt(limit), filter)
+        res.json(ChaiteResponse.ok(result))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
