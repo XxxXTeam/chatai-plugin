@@ -1422,28 +1422,59 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
                     } else if (valType === 'image') {
                         // 图片 URL - 使用统一函数获取
                         const imgUrl = getMediaUrl(valData) || val.url || val.file || ''
-                        forwardTexts.push(`${nickname}: [图片${imgUrl ? '' : '(无URL)'}]`)
+                        // 取得失败时改写为带 URL 的文本占位，与主消息路径的图片兜底同风格，
+                        // 不能静默丢弃：模型需要知道这里原本有一张图
+                        let imageText = `[图片${imgUrl ? '' : '(无URL)'}]`
                         msgInfo.content.push({ type: 'image', url: imgUrl })
-                        if (imgUrl && imgUrl.startsWith('http')) {
-                            // QQ图片需要预先下载（需要特殊referer）
-                            if (isQQPicUrl(imgUrl)) {
-                                const imageData = await fetchImage(imgUrl)
-                                if (imageData) {
+                        if (imgUrl) {
+                            try {
+                                if (imgUrl.startsWith('http')) {
+                                    // QQ图片需要预先下载（需要特殊referer）
+                                    if (isQQPicUrl(imgUrl)) {
+                                        const imageData = await fetchImage(imgUrl)
+                                        if (imageData) {
+                                            contents.push({
+                                                type: 'image',
+                                                image: imageData.base64,
+                                                mimeType: imageData.mimeType,
+                                                source: 'forward'
+                                            })
+                                        } else {
+                                            imageText = `[图片:${imgUrl.substring(0, 50)}...]`
+                                        }
+                                    } else {
+                                        contents.push({
+                                            type: 'image_url',
+                                            image_url: { url: imgUrl },
+                                            source: 'forward'
+                                        })
+                                    }
+                                } else if (imgUrl.startsWith('file://') || imgUrl.startsWith('/')) {
+                                    const imageData = await readLocalImage(imgUrl)
+                                    if (imageData) {
+                                        contents.push({
+                                            type: 'image',
+                                            image: imageData.base64,
+                                            mimeType: imageData.mimeType,
+                                            source: 'forward'
+                                        })
+                                    } else {
+                                        imageText = `[图片:${imgUrl.substring(0, 50)}...]`
+                                    }
+                                } else if (imgUrl.startsWith('base64://')) {
                                     contents.push({
                                         type: 'image',
-                                        image: imageData.base64,
-                                        mimeType: imageData.mimeType,
+                                        image: imgUrl.replace('base64://', ''),
+                                        mimeType: 'image/png',
                                         source: 'forward'
                                     })
                                 }
-                            } else {
-                                contents.push({
-                                    type: 'image_url',
-                                    image_url: { url: imgUrl },
-                                    source: 'forward'
-                                })
+                            } catch (err) {
+                                logger.warn(`[MessageParser][Forward][Image] 获取图片失败: ${imgUrl}`, err.message)
+                                imageText = `[图片:${imgUrl.substring(0, 50)}...]`
                             }
                         }
+                        forwardTexts.push(`${nickname}: ${imageText}`)
                     } else if (valType === 'video') {
                         // 视频 URL
                         const videoUrl = getMediaUrl(valData) || val.url || val.file || ''
@@ -1618,6 +1649,36 @@ const MESSAGE_IMAGE_TIMEOUT_MS = 30000
 
 /** 消息图片响应体上限 */
 const MESSAGE_IMAGE_MAX_BYTES = 20 * 1024 * 1024
+
+/** 本地图片扩展名到 MIME 的映射；未列出的后缀按 JPEG 处理 */
+const MESSAGE_IMAGE_EXT_MIME = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    bmp: 'image/bmp'
+}
+
+/**
+ * 读取本地图片并转为 base64。
+ * 转发消息里的图片可能是协议端落盘的本地文件（file:// 或绝对路径），
+ * 不能复用 fetchImage：其内部 assertSafeUrl 只放行 http/https，file:// 必然被拒。
+ * @param {string} target - file:// URL 或本地绝对路径
+ * @returns {Promise<{base64: string, mimeType: string}|null>} 读取结果；文件不存在或读取失败返回 null
+ */
+async function readLocalImage(target) {
+    const filePath = target.startsWith('file://') ? target.slice('file://'.length) : target
+    try {
+        const fs = await import('node:fs')
+        const buffer = await fs.promises.readFile(filePath)
+        const ext = filePath.slice(filePath.lastIndexOf('.') + 1).toLowerCase()
+        return { base64: buffer.toString('base64'), mimeType: MESSAGE_IMAGE_EXT_MIME[ext] || 'image/jpeg' }
+    } catch (err) {
+        logger.warn(`[MessageParser] 读取本地图片失败: ${target}`, err.message)
+        return null
+    }
+}
 
 async function fetchImage(url, options = {}) {
     if (!url) return null

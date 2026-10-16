@@ -151,6 +151,23 @@ function getConfigTimeouts() {
 }
 
 /**
+ * 创建带 abort 预检的 node-fetch 实例，签名与 node-fetch 默认导出一致。
+ *
+ * @returns {Promise<Function>} fetch 函数 (url, options) => Promise<Response>
+ */
+async function createAbortGuardedFetch() {
+    const mod = await import('node-fetch')
+    const nodeFetch = mod.default
+    const { AbortError } = mod
+    return async function abortGuardedFetch(url, options) {
+        if (options?.signal?.aborted) {
+            throw new AbortError('The operation was aborted.')
+        }
+        return await nodeFetch(url, options)
+    }
+}
+
+/**
  * MCP Client - Model Context Protocol 客户端实现
  *
  * @description 支持多种传输类型连接 MCP 服务器
@@ -903,7 +920,7 @@ export class McpClient {
         const eventSourceOptions = {
             fetch: async (input, init) => {
                 const targetUrl = String(input)
-                const nodeFetch = (await import('node-fetch')).default
+                const nodeFetch = await createAbortGuardedFetch()
                 const response = await nodeFetch(targetUrl, {
                     ...init,
                     ...proxyService.getFetchOptions(targetUrl, 'api'),
@@ -1364,7 +1381,7 @@ export class McpClient {
         let responseText = ''
         let lastError = null
 
-        const nodeFetch = (await import('node-fetch')).default
+        const nodeFetch = await createAbortGuardedFetch()
         for (const [index, url] of messageUrls.entries()) {
             try {
                 if (notification.method !== 'ping') {
@@ -1463,8 +1480,12 @@ export class McpClient {
         let responseText = ''
         let lastError = null
 
-        const nodeFetch = (await import('node-fetch')).default
+        const nodeFetch = await createAbortGuardedFetch()
         for (const [index, url] of messageUrls.entries()) {
+            if (controller.signal.aborted) {
+                lastError = lastError || new Error(`SSE request aborted before POST for ${request.method}`)
+                break
+            }
             try {
                 if (index > 0 && request.method !== 'ping') {
                     logger.debug(`[MCP] Retrying SSE POST to: ${url}, id: ${request.id}, method: ${request.method}`)
@@ -1598,7 +1619,8 @@ export class McpClient {
         this.httpAbortControllers.add(controller)
 
         try {
-            const nodeFetch = (await import('node-fetch')).default
+            /* abortHttpRequests() 可能已中止本控制器，走带预检的包装避免未捕获异常 */
+            const nodeFetch = await createAbortGuardedFetch()
             const response = await nodeFetch(this.httpUrl, {
                 ...proxyService.getFetchOptions(this.httpUrl, 'api'),
                 method: 'POST',
@@ -2358,7 +2380,7 @@ export class McpClient {
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), this.timeouts.terminate)
         try {
-            const nodeFetch = (await import('node-fetch')).default
+            const nodeFetch = await createAbortGuardedFetch()
             const response = await nodeFetch(this.httpUrl, {
                 ...proxyService.getFetchOptions(this.httpUrl, 'api'),
                 method: 'DELETE',

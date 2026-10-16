@@ -25,7 +25,9 @@ export const MultipleKeyStrategyChoice = {
  * 由 ChannelManager 归一化写入，结构为毫秒数值
  * @typedef {Object} ChannelTimeout
  * @property {number} [connect] - 连接超时(ms)
- * @property {number} [read] - 读取超时(ms)，即整体请求超时
+ * @property {number} [read] - 读取超时(ms)，即期望的整体请求超时
+ * @property {number} [maxTimeout] - 最大超时(ms)，单次请求的硬上限，0 或未配置表示不限制。
+ *                                   生效值为 min(read, maxTimeout)，超时即判失败并由 LlmDelegator 继续重试
  */
 
 export class BaseClientOptions {

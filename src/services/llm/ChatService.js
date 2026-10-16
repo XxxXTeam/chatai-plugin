@@ -602,7 +602,6 @@ export class ChatService {
             clientOptions.keyIndex = keyInfo.keyIndex
             clientOptions.keyObj = keyInfo.keyObj
             clientOptions.channelName = channel.name
-            // 传递渠道超时配置 { connect, read }，由适配器接到各 SDK 的 timeout 选项
             if (channel.timeout) {
                 clientOptions.timeout = channel.timeout
             }

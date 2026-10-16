@@ -18,7 +18,7 @@ const ERROR_SAMPLES = {
     quota: ['429', 'quota', 'rate_limit', 'exceeded'],
     server: ['500', '502', '503', '504', 'internal server error'],
     client: ['400', '404', 'invalid_request', 'invalid_parameter', 'validation', 'not found'],
-    timeout: ['timeout', 'etimedout'],
+    timeout: ['timeout', 'etimedout', 'timed out', 'aborted when fetching'],
     network: ['econnrefused', 'enotfound', 'network']
 }
 

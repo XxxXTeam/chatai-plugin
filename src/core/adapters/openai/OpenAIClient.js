@@ -487,11 +487,17 @@ export class OpenAIClient extends AbstractClient {
         if (this.baseUrl) {
             clientOptions.baseURL = this.baseUrl
         }
-        // 接通渠道 timeout.read，未配置时沿用 SDK 默认值
+        // 接通渠道 timeout.read 与 maxTimeout（取小），未配置时沿用 SDK 默认值
         const requestTimeout = this.resolveRequestTimeout()
         if (requestTimeout) {
             clientOptions.timeout = requestTimeout
         }
+        /*
+         * 关闭 SDK 内部重试：否则超时会先被 SDK 自身重试（默认 maxRetries=2），
+         * 单次尝试的墙上时间被放大为 timeout × (maxRetries + 1)，"最大超时"不成立。
+         * 重试节奏统一由 LlmDelegator 掌控，实现"超时即失败并继续重试"的语义。
+         */
+        clientOptions.maxRetries = 0
         if (channelProxy) {
             clientOptions.httpAgent = channelProxy
             logger.debug('[OpenAI适配器] 使用代理:', proxyService.getProfileForScope('channel')?.name)

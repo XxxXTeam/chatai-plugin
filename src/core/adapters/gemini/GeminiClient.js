@@ -97,9 +97,11 @@ export class GeminiClient extends AbstractClient {
 
     /**
      * 构建 Gemini SDK 的 RequestOptions
-     * 合并自定义 baseUrl 与渠道配置的请求超时（SDK 的 RequestOptions.timeout 单位为毫秒）
+     * 合并自定义 baseUrl 与渠道配置的请求超时（read 与 maxTimeout 取小，SDK 的 RequestOptions.timeout 单位为毫秒）
+     * 该 SDK 无内部重试机制（无 maxRetries 选项），超时经 AbortController 中止请求并抛出
+     * GoogleGenerativeAIAbortError，由 LlmDelegator 统一重试，无需额外关闭 SDK 重试。
      * @param {string} [baseUrl] - 自定义 baseUrl
-     * @returns {{baseUrl?: string, timeout?: number}|undefined} 请求选项，均未配置时为 undefined
+     * @returns {{baseUrl?: string, timeout?: number, customHeaders?: Object}|undefined} 请求选项，均未配置时为 undefined
      */
     buildGeminiRequestOptions(baseUrl) {
         const requestTimeout = this.resolveRequestTimeout()

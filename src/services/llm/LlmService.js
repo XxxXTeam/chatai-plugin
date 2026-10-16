@@ -96,7 +96,7 @@ export class LlmService {
             apiInterface = channel.apiInterface || channel.openaiApiInterface || 'chat'
             experimental = channel.experimental || {}
             openaiResponses = channel.openaiResponses || {}
-            // 渠道超时配置 { connect, read }，调用方显式传入时优先
+            // 渠道超时配置 { connect, read, maxTimeout }，调用方显式传入时优先
             channelTimeout = options.timeout || channel.timeout
             // 自动选择渠道时，从渠道获取 imageConfig（调用方未显式传入的场景）
             if (!options.imageConfig && channel.imageConfig) {
@@ -184,7 +184,7 @@ export class LlmService {
                 ? { reasoningBudgetTokens: thinkingOptions.reasoningBudgetTokens }
                 : {})
         }
-        // 渠道超时配置 { connect, read }，由适配器的 resolveRequestTimeout 解析后传给各家 SDK
+        // 渠道超时配置 { connect, read, maxTimeout }，由适配器的 resolveRequestTimeout 取 min(read, maxTimeout) 后传给各家 SDK
         if (channelTimeout) {
             clientConfig.timeout = channelTimeout
         }
@@ -371,7 +371,7 @@ export class LlmService {
             features: ['chat'],
             tools: [],
             imageConfig: channel.imageConfig || {},
-            /* 渠道超时配置 { connect, read }，供绕过 ChatService 的调用方同样受超时约束 */
+            /* 渠道超时配置 { connect, read, maxTimeout }，供绕过 ChatService 的调用方同样受超时约束 */
             ...(channel.timeout ? { timeout: channel.timeout } : {})
         }
 

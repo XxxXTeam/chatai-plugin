@@ -905,9 +905,14 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
             // 使定时器残留到超时时长结束才被回收
             const timeoutId = setTimeout(() => controller.abort(), URL_TO_BASE64_CONFIG.timeout)
             try {
-                // SSRF 预检
+                // SSRF 预检：校验不通过即判为不可用，直接返回空数据（原先 .catch(()=>{}) 会吞掉错误使守卫失效）
                 const { assertSafeUrl } = await import('../../mcp/tools/helpers.js')
-                await assertSafeUrl(url).catch(() => {})
+                try {
+                    await assertSafeUrl(url)
+                } catch (ssrfError) {
+                    logger.debug(`[urlToBase64] URL 安全校验未通过，跳过: ${ssrfError.message}`)
+                    return { mimeType: defaultMimeType, data: '', error: ssrfError.message }
+                }
                 const isQQPic =
                     url.includes('gchat.qpic.cn') ||
                     url.includes('c2cpicdw.qpic.cn') ||
@@ -1006,6 +1011,367 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
         }
         throw error
     }
+}
+
+/** 历史消息图片并发处理上限：图片处理是网络 IO 密集任务，4 路并发可在不明显抬高瞬时连接数的前提下接近线性提速 */
+const HISTORY_IMAGE_CONCURRENCY = 4
+
+/** 历史消息图片获取超时（ms），默认沿用 urlToBase64 的请求超时 */
+const HISTORY_IMAGE_FETCH_TIMEOUT = URL_TO_BASE64_CONFIG.timeout
+
+/** 历史消息图片字节上限：超过该大小的历史图片不内联，避免单条消息撑爆请求体 */
+const HISTORY_IMAGE_MAX_BYTES = 20 * 1024 * 1024
+
+/** QQ 图床请求 Referer：图床对空 Referer 会拒绝返回图片 */
+const QQ_PIC_REFERER = 'https://qzone.qq.com/'
+
+/** 图片被移除后 content 变空的占位文本：空 content 数组发送给 API 会报错，用中性文本兜底 */
+const HISTORY_IMAGE_REMOVED_PLACEHOLDER = '[历史图片已过期，已移除]'
+
+/** QQ 图床域名白名单（含常见子域），仅这些域名需要在长上下文中刷新 rkey */
+const QQ_PIC_HOSTS = [
+    'gchat.qpic.cn',
+    'c2cpicdw.qpic.cn',
+    'p.qpic.cn',
+    'multimedia.nt.qq.com',
+    'multimedia.nt.qq.com.cn'
+]
+
+/** rkey 刷新服务模块缓存：undefined=未加载，null=不可用，对象=已加载 */
+let rkeyRefreshModuleCache
+
+/**
+ * 判断 URL 是否属于 QQ 图床（按 hostname 精确比对，避免 includes 误判）
+ * @param {string} url - 待判定 URL
+ * @returns {boolean} 是否属于 QQ 图床域名
+ */
+function isQQPicUrl(url) {
+    if (typeof url !== 'string' || !url) return false
+    let hostname = ''
+    try {
+        hostname = new URL(url).hostname.toLowerCase()
+    } catch {
+        return false
+    }
+    if (!hostname) return false
+    return QQ_PIC_HOSTS.some(domain => hostname === domain || hostname.endsWith(`.${domain}`))
+}
+
+/**
+ * 受控并发映射：结果数组与输入索引一一对应，任一 worker 抛错都不会中断整批
+ * @param {Array} items - 待处理项
+ * @param {number} limit - 最大并发数
+ * @param {Function} worker - 单项处理函数 (item, index) => Promise<any>
+ * @returns {Promise<Array>} 与输入等长、索引一致的结果数组
+ */
+async function mapWithConcurrency(items, limit, worker) {
+    const results = new Array(items.length)
+    let cursor = 0
+    const size = Math.max(1, Math.min(limit, items.length))
+    const runners = Array.from({ length: size }, async () => {
+        while (cursor < items.length) {
+            const index = cursor++
+            try {
+                results[index] = await worker(items[index], index)
+            } catch (err) {
+                logger.debug('[MediaPreprocess] 并发处理异常:', err?.message)
+                results[index] = { removed: true }
+            }
+        }
+    })
+    await Promise.all(runners)
+    return results
+}
+
+/**
+ * 收集历史消息中需要刷新/校验的 QQ 图床图片引用。
+ * 只收集 user 角色消息里 http(s) 的 QQ 图床 URL；file://、base64://、data: 已内联不会过期，不做处理。
+ * @param {Array} histories - 消息历史
+ * @returns {Array<{item: Object, url: string, kind: string}>} 图片引用列表（item 为 content 数组中的对象引用）
+ */
+function collectHistoryImageRefs(histories) {
+    const refs = []
+    for (const msg of histories) {
+        if (msg.role !== 'user' || !Array.isArray(msg.content)) continue
+        for (const item of msg.content) {
+            if (item.type === 'image' && isQQPicUrl(item.image)) {
+                refs.push({ item, url: item.image, kind: 'image' })
+            } else if (item.type === 'image_url' && isQQPicUrl(item.image_url?.url)) {
+                refs.push({ item, url: item.image_url.url, kind: 'image_url' })
+            }
+        }
+    }
+    return refs
+}
+
+/**
+ * 加载 rkey 刷新服务模块。
+ * 模块可能尚未提供或加载失败，任何异常都降级为「刷新不可用」，不得影响图片处理主流程。
+ * @returns {Promise<Object|null>} 模块命名空间；不可用时返回 null
+ */
+async function loadRkeyRefreshModule() {
+    if (rkeyRefreshModuleCache !== undefined) return rkeyRefreshModuleCache
+    try {
+        rkeyRefreshModuleCache = await import('../../services/media/RkeyRefreshService.js')
+    } catch (err) {
+        logger.debug('[MediaPreprocess] rkey 刷新服务不可用，跳过刷新:', err?.message)
+        rkeyRefreshModuleCache = null
+    }
+    return rkeyRefreshModuleCache
+}
+
+/**
+ * 判断当前 bot 是否具备 rkey 刷新能力
+ * @param {Object|null} refresher - rkey 刷新服务
+ * @param {Object|null} bot - Yunzai Bot 实例
+ * @returns {boolean} 是否可尝试刷新
+ */
+function canRefreshWithBot(refresher, bot) {
+    if (!bot || typeof refresher?.refreshImageUrl !== 'function') return false
+    if (typeof refresher.hasRefreshCapability !== 'function') return true
+    try {
+        return refresher.hasRefreshCapability(bot) === true
+    } catch (err) {
+        logger.debug('[MediaPreprocess] rkey 能力检测失败:', err?.message)
+        return false
+    }
+}
+
+/**
+ * 调用 rkey 刷新服务，永不抛异常
+ * @param {Object} refresher - rkey 刷新服务
+ * @param {string} url - 原始图片 URL
+ * @param {Object} bot - Yunzai Bot 实例
+ * @returns {Promise<Object|null>} 刷新结果，异常或非法返回时为 null
+ */
+async function safeRefreshImageUrl(refresher, url, bot) {
+    try {
+        const result = await refresher.refreshImageUrl(url, { bot })
+        return result && typeof result === 'object' ? result : null
+    } catch (err) {
+        logger.debug('[MediaPreprocess] rkey 刷新异常:', err?.message)
+        return null
+    }
+}
+
+/**
+ * 历史消息图片单次获取：一次 GET 同时完成「能否获取」判定与 base64 转换。
+ * 按用户要求，图片可用性只能以真实获取结果为准，不使用 assertSafeUrl / validateImageUrl 之类的外部预检，
+ * 避免预检结论与真实可得性不一致时误删可用图片。
+ * 成功判据：HTTP ok（含 206）且响应体确为图片字节（content-type 为 image/* 或文件头魔数可识别）。
+ * 失败判据：HTTP 400（含图床 download url has expired）/ 非图片内容 / 超出字节上限 / 超时 / 网络错误，
+ * 一律返回 ok:false，由调用方移除该图片；本函数不抛异常。
+ * @param {string} url - 图片 URL
+ * @param {number} [timeout=HISTORY_IMAGE_FETCH_TIMEOUT] - 请求超时（ms）
+ * @returns {Promise<{ok: boolean, mimeType: string, data: string, error?: string}>} 获取结果，data 为 base64
+ */
+async function fetchHistoryImageBytes(url, timeout = HISTORY_IMAGE_FETCH_TIMEOUT) {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), timeout)
+    try {
+        let referer
+        try {
+            referer = isQQPicUrl(url) ? QQ_PIC_REFERER : new URL(url).origin + '/'
+        } catch {
+            referer = QQ_PIC_REFERER
+        }
+        const response = await fetch(url, {
+            method: 'GET',
+            signal: controller.signal,
+            headers: {
+                'User-Agent': URL_TO_BASE64_CONFIG.userAgent,
+                Accept: 'image/*,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                Referer: referer
+            }
+        })
+
+        if (!response.ok && response.status !== 206) {
+            logger.debug(`[MediaPreprocess] 图片获取失败 HTTP ${response.status}:`, url.substring(0, 50))
+            return { ok: false, mimeType: 'image/jpeg', data: '', error: `HTTP ${response.status}` }
+        }
+
+        const declaredLength = Number(response.headers.get('content-length'))
+        if (Number.isFinite(declaredLength) && declaredLength > HISTORY_IMAGE_MAX_BYTES) {
+            logger.debug(
+                `[MediaPreprocess] 图片过大(${(declaredLength / 1024 / 1024).toFixed(1)}MB)，跳过:`,
+                url.substring(0, 50)
+            )
+            return { ok: false, mimeType: 'image/jpeg', data: '', error: '图片超出大小上限' }
+        }
+
+        const buffer = Buffer.from(await response.arrayBuffer())
+        if (buffer.length === 0 || buffer.length > HISTORY_IMAGE_MAX_BYTES) {
+            return { ok: false, mimeType: 'image/jpeg', data: '', error: '响应体为空或超出大小上限' }
+        }
+
+        const magicMime = detectImageMagicBytes(buffer)
+        const headerMime = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
+        if (!magicMime && !headerMime.startsWith('image/')) {
+            logger.debug('[MediaPreprocess] 响应非图片内容，跳过:', url.substring(0, 50))
+            return { ok: false, mimeType: 'image/jpeg', data: '', error: '非图片内容' }
+        }
+
+        return { ok: true, mimeType: magicMime || headerMime, data: buffer.toString('base64') }
+    } catch (err) {
+        const reason = err?.name === 'AbortError' ? '请求超时' : err?.message
+        logger.debug('[MediaPreprocess] 图片获取异常:', reason)
+        return { ok: false, mimeType: 'image/jpeg', data: '', error: reason }
+    } finally {
+        clearTimeout(timeoutId)
+    }
+}
+
+/**
+ * 通过文件头魔数识别图片类型
+ * @param {Buffer} buffer - 图片字节
+ * @returns {string|null} MIME 类型；无法识别时返回 null
+ */
+function detectImageMagicBytes(buffer) {
+    if (!buffer || buffer.length < 12) return null
+    if (buffer[0] === 0xff && buffer[1] === 0xd8) return 'image/jpeg'
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return 'image/png'
+    if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) return 'image/gif'
+    if (
+        buffer[0] === 0x52 &&
+        buffer[1] === 0x49 &&
+        buffer[2] === 0x46 &&
+        buffer[3] === 0x46 &&
+        buffer[8] === 0x57 &&
+        buffer[9] === 0x45 &&
+        buffer[10] === 0x42 &&
+        buffer[11] === 0x50
+    ) {
+        return 'image/webp'
+    }
+    if (buffer[0] === 0x42 && buffer[1] === 0x4d) return 'image/bmp'
+    // HEIC/AVIF 等 ISO-BMFF 容器：偏移 4 起为 'ftyp'，品牌盒区分具体类型
+    if (buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70) {
+        const brand = buffer.toString('latin1', 8, 12).toLowerCase()
+        if (brand.startsWith('avif') || brand.startsWith('avis')) return 'image/avif'
+        if (brand.startsWith('heic') || brand.startsWith('heix') || brand.startsWith('hevc')) return 'image/heic'
+    }
+    return null
+}
+
+/**
+ * 解析图片获取函数，默认走 fetchHistoryImageBytes；显式注入时以注入实现为准
+ * @param {Object} options - 预处理选项
+ * @returns {Function} (url) => Promise<{ok: boolean, mimeType: string, data: string, error?: string}>
+ */
+function resolveImageFetcher(options = {}) {
+    if (typeof options.imageFetcher === 'function') return options.imageFetcher
+    // 兼容早期注入点：imageDownloader 返回 {mimeType, data, error}，无 ok 字段时按 data 非空判定
+    if (typeof options.imageDownloader === 'function') {
+        const legacy = options.imageDownloader
+        return async url => {
+            const result = await legacy(url)
+            const ok = result?.ok === true || (!result?.error && !!result?.data)
+            return { ok, mimeType: result?.mimeType || 'image/jpeg', data: result?.data || '', error: result?.error }
+        }
+    }
+    return url => fetchHistoryImageBytes(url)
+}
+
+/**
+ * 解析图片可用性探测函数。图片路径已改为「一次 GET 即判定」，默认不再做独立探测（返回恒真），
+ * 仅保留 options.imageAvailabilityProbe 注入点供调用方覆盖。
+ * @param {Object} options - 预处理选项
+ * @returns {Function|null} (url) => Promise<boolean>；未注入时返回 null
+ */
+function resolveImageAvailabilityProbe(options = {}) {
+    if (typeof options.imageAvailabilityProbe === 'function') return options.imageAvailabilityProbe
+    return null
+}
+
+/**
+ * 处理单张历史图片：rkey 刷新 → 一次 GET 获取字节 → 转 base64。
+ * 可用性完全以获取结果为准：刷新失败不再单独探测，而是直接尝试获取，
+ * 拿不到有效图片字节即判为不可获取并移除，避免探测与真实可得性不一致导致误删。
+ * @param {{url: string, kind: string}} ref - 图片引用
+ * @param {Object} ctx - 处理上下文（refresher/bot/canRefresh/fetch/probe/clientType）
+ * @returns {Promise<{removed: boolean, value?: Object}>} removed 为 true 表示该图片应被移除
+ */
+async function resolveOneHistoryImage(ref, ctx) {
+    let currentUrl = ref.url
+    let refreshed = false
+    if (ctx.canRefresh) {
+        const refreshResult = await safeRefreshImageUrl(ctx.refresher, currentUrl, ctx.bot)
+        // 只接受仍属 QQ 图床域名的新 URL，避免刷新服务返回意外地址
+        if (refreshResult?.refreshed === true && isQQPicUrl(refreshResult.url)) {
+            currentUrl = refreshResult.url
+            refreshed = true
+        }
+    }
+    // 仅保留调用方显式注入的可用性探测点；默认实现已改为「一次 GET 即判定」，不再单独探测
+    if (!refreshed && typeof ctx.probe === 'function') {
+        const available = await ctx.probe(currentUrl)
+        if (!available) {
+            logger.debug('[MediaPreprocess] 图片可用性探测未通过，移除:', currentUrl.substring(0, 50))
+            return { removed: true }
+        }
+    }
+    try {
+        const { ok, mimeType, data, error } = await ctx.fetch(currentUrl)
+        if (!ok || !data || error) {
+            logger.debug('[MediaPreprocess] 图片不可获取，移除:', currentUrl.substring(0, 50), error || '')
+            return { removed: true }
+        }
+        if (refreshed) logger.debug('[MediaPreprocess] 图片 rkey 刷新成功:', currentUrl.substring(0, 50))
+        // image_url 分支保持原有语义：客户端不支持该 mime 时先转码，转码失败降级为文本占位
+        if (ref.kind === 'image_url' && ctx.clientType && isUnsupportedImageMime(mimeType, ctx.clientType)) {
+            const transcoded = await transcodeImageValueForClient(
+                `data:${mimeType};base64,${data}`,
+                mimeType,
+                ctx.clientType,
+                currentUrl.substring(0, 50)
+            )
+            if (!transcoded) return { removed: false, value: { type: 'text', text: '[不支持的图片已跳过]' } }
+            return {
+                removed: false,
+                value: {
+                    type: 'image',
+                    image: `data:${transcoded.mimeType};base64,${transcoded.data}`,
+                    mimeType: transcoded.mimeType
+                }
+            }
+        }
+        return { removed: false, value: { type: 'image', image: `data:${mimeType};base64,${data}` } }
+    } catch (err) {
+        logger.debug('[MediaPreprocess] 图片获取失败，移除:', err?.message)
+        return { removed: true }
+    }
+}
+
+/**
+ * 并发处理历史消息中的 QQ 图床图片（刷新/校验/下载），结果以 content 项对象引用为键
+ * @param {Array} histories - 消息历史
+ * @param {Object} options - 预处理选项
+ * @returns {Promise<Map<Object, {removed: boolean, value?: Object}>>} 处理结果映射
+ */
+async function resolveHistoryImages(histories, options = {}) {
+    const results = new Map()
+    if (!Array.isArray(histories) || histories.length === 0) return results
+    const refs = collectHistoryImageRefs(histories)
+    if (refs.length === 0) return results
+
+    // options.rkeyRefresher 显式传入时优先（传 null 表示禁用刷新）；否则动态加载 rkey 服务
+    const refresher = Object.prototype.hasOwnProperty.call(options, 'rkeyRefresher')
+        ? options.rkeyRefresher && { refreshImageUrl: options.rkeyRefresher }
+        : await loadRkeyRefreshModule()
+    // bot 上下文：调用方未透传时回退到 Yunzai 全局 Bot 实例
+    const bot = options.bot || globalThis.Bot || null
+    const canRefresh = canRefreshWithBot(refresher, bot)
+    const probe = resolveImageAvailabilityProbe(options)
+    const fetchImage = resolveImageFetcher(options)
+    const ctx = { refresher, bot, canRefresh, probe, fetch: fetchImage, clientType: options.clientType || '' }
+
+    const resolved = await mapWithConcurrency(refs, HISTORY_IMAGE_CONCURRENCY, ref => resolveOneHistoryImage(ref, ctx))
+    refs.forEach((ref, index) => results.set(ref.item, resolved[index] || { removed: true }))
+    logger.debug(
+        `[MediaPreprocess] 历史图片处理完成: 共${refs.length}张, 移除${resolved.filter(r => r?.removed).length}张`
+    )
+    return results
 }
 
 /**
@@ -1147,11 +1513,18 @@ async function transcodeImageValueForClient(imageValue, mimeType, clientType, la
  * @param {boolean} [options.processAudio=true] - 是否处理音频
  * @param {string} [options.clientType=''] - 客户端类型
  * @param {number} [options.maxVideoSize=20*1024*1024] - 最大视频大小(bytes)
+ * @param {Object} [options.bot] - Yunzai Bot 实例；缺省时回退到 globalThis.Bot，供 rkey 刷新使用
+ * @param {Function} [options.rkeyRefresher] - 自定义 rkey 刷新器；显式传入 null 可禁用刷新
+ * @param {Function} [options.imageAvailabilityProbe] - 自定义图片可用性探测函数 (url) => Promise<boolean>；不注入时不做独立探测
+ * @param {Function} [options.imageFetcher] - 自定义图片获取函数 (url) => Promise<{ok, mimeType, data, error}>
+ * @param {Function} [options.imageDownloader] - 旧版图片下载函数 (url) => Promise<{mimeType, data, error}>，兼容保留
  * @returns {Promise<Array>}
  */
 export async function preprocessMediaToBase64(histories, options = {}) {
     const { processVideo = true, processAudio = true, clientType = '', maxVideoSize = 20 * 1024 * 1024 } = options
     const processed = []
+    // 阶段一：并发完成 QQ 图床图片的 rkey 刷新 / 可用性校验 / 下载，再按原顺序组装消息
+    const historyImageResults = await resolveHistoryImages(histories, options)
 
     for (const msg of histories) {
         if (msg.role === 'user' && Array.isArray(msg.content)) {
@@ -1159,6 +1532,16 @@ export async function preprocessMediaToBase64(histories, options = {}) {
             for (const item of msg.content) {
                 try {
                     if (item.type === 'image' && item.image) {
+                        // QQ 图床项已在并发阶段处理完毕：不可用则整项移除，可用则直接采用其结果
+                        const resolvedImage = historyImageResults.get(item)
+                        if (resolvedImage) {
+                            if (resolvedImage.removed) {
+                                logger.debug('[MediaPreprocess] 图片不可用已移除:', item.image?.substring(0, 50))
+                                continue
+                            }
+                            newContent.push(resolvedImage.value)
+                            continue
+                        }
                         if (item.image.startsWith('data:')) {
                             const idx = item.image.indexOf(';base64,')
                             if (idx !== -1) {
@@ -1241,6 +1624,19 @@ export async function preprocessMediaToBase64(histories, options = {}) {
                         item.image_url?.url &&
                         !item.image_url.url.startsWith('data:')
                     ) {
+                        // QQ 图床项已在并发阶段处理完毕：不可用则整项移除，可用则直接采用其结果
+                        const resolvedImageUrl = historyImageResults.get(item)
+                        if (resolvedImageUrl) {
+                            if (resolvedImageUrl.removed) {
+                                logger.debug(
+                                    '[MediaPreprocess] image_url不可用已移除:',
+                                    item.image_url.url?.substring(0, 50)
+                                )
+                                continue
+                            }
+                            newContent.push(resolvedImageUrl.value)
+                            continue
+                        }
                         // 兼容 "base64:<原文>" 前缀：剥头还原为原始 URL 或 data URL
                         let imageUrlValue = item.image_url.url
                         if (imageUrlValue.startsWith('base64:')) {
@@ -1360,6 +1756,11 @@ export async function preprocessMediaToBase64(histories, options = {}) {
                     logger.debug('[MediaPreprocess] 处理失败:', err.message)
                     newContent.push(item)
                 }
+            }
+            // 图片全部被移除时 content 会变成空数组，空 content 发送给 API 会报错：补一条中性文本占位
+            if (newContent.length === 0 && msg.content.length > 0) {
+                newContent.push({ type: 'text', text: HISTORY_IMAGE_REMOVED_PLACEHOLDER })
+                logger.debug('[MediaPreprocess] content 已空，插入占位文本')
             }
             processed.push({ ...msg, content: newContent })
         } else {
@@ -1542,17 +1943,21 @@ export class AbstractClient {
 
     /**
      * 解析渠道配置的请求超时（毫秒）
-     * 渠道 timeout 结构为 { connect, read }（见 ChannelManager 渠道归一化），
-     * 这里取 read 作为整体请求超时传给各家 SDK；未配置时返回 undefined 以沿用 SDK 默认值
      * @returns {number|undefined} 超时毫秒数
      */
     resolveRequestTimeout() {
+        const positiveMs = value => (Number.isFinite(value) && value > 0 ? value : undefined)
         const timeout = this.options?.timeout
         if (typeof timeout === 'number') {
-            return Number.isFinite(timeout) && timeout > 0 ? timeout : undefined
+            return positiveMs(timeout)
         }
-        const read = timeout?.read
-        return Number.isFinite(read) && read > 0 ? read : undefined
+        const read = positiveMs(timeout?.read)
+        const maxTimeout = positiveMs(timeout?.maxTimeout)
+        /* 未配置 maxTimeout：完全沿用 read，保持既有行为 */
+        if (maxTimeout === undefined) {
+            return read
+        }
+        return read === undefined ? maxTimeout : Math.min(read, maxTimeout)
     }
 
     /**

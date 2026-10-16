@@ -76,6 +76,11 @@ async function runBatchTestSse(req, res) {
         results: []
     }
     activeBatchTests.set(testId, testState)
+    res.on('close', () => {
+        if (res.writableEnded) return
+        testState.aborted = true
+        chatLogger.info(`[测试面板] 客户端断开，中止测试: ${testId}`)
+    })
 
     const sendEvent = (event, data) => {
         if (!testState.aborted && !res.writableEnded) {
@@ -99,7 +104,6 @@ async function runBatchTestSse(req, res) {
     chatLogger.info(`[测试面板] 开始批量测试: ${channel.name}, ${testModels.length}个模型, 并发${concurrency}`)
 
     const results = []
-    let completed = 0
     let running = 0
     let modelIndex = 0
 
@@ -202,9 +206,10 @@ async function runBatchTestSse(req, res) {
             return result
         } finally {
             running--
-            completed++
+            // 进度写回 testState：GET /active-tests 读的是 state.completed，只自增局部变量会让该接口恒返回 0
+            testState.completed++
             sendEvent('progress', {
-                completed,
+                completed: testState.completed,
                 total: testModels.length,
                 running,
                 successCount: results.filter(r => r.success).length,

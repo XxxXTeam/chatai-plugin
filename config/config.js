@@ -463,7 +463,9 @@ class Config {
              *   },
              *   timeout: {                      // 超时配置
              *     connect: number,              // 连接超时（毫秒）
-             *     read: number                  // 读取超时（毫秒）
+             *     read: number,                 // 读取超时（毫秒），期望的整体请求超时
+             *     maxTimeout: number            // 最大超时（毫秒），单次请求硬上限，0 表示不限制；
+             *                                   // 生效值为 min(read, maxTimeout)，超时即判失败并由重试链路继续重试
              *   },
              *   retry: {                        // 重试配置（已被 ChatService 消费，驱动同渠道重试）
              *     maxAttempts: number,          // 同渠道连续失败多少次后强制切换渠道（含空响应）
