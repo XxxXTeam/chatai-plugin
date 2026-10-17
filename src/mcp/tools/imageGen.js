@@ -5,6 +5,7 @@
 
 import config from '../../../config/config.js'
 import { StandardBotApi } from '../../core/platform/index.js'
+import { chatLogger as logger } from '../../core/utils/logger.js'
 
 /* 懒加载 ImageGen 实例和预设管理器 */
 let _imageGenInstance = null
@@ -46,6 +47,37 @@ function injectEvent(imageGen, e) {
     } else {
         /* 无事件上下文时构造最小模拟对象，避免 getImageModel 等方法报错 */
         imageGen.e = { isGroup: false, reply: async () => {} }
+    }
+}
+
+/**
+ * 补齐模型未提供的参考图。
+ *
+ * 工具描述里写着 image_urls「可从消息中解析获取」，但模型看到的是图片内容块
+ * （QQ 图床在 messageParser 中已被内联成 base64，模型拿不到 URL 字符串），
+ * 因此模型调用本工具时 image_urls 常常为空，导致参考图丢失、被判定成文生图。
+ *
+ * 这里从事件中兜底收集：仅取「当前消息 + 被引用消息」的图片，
+ * 不含 @ 头像与发送者头像兜底——用户说「画一只猫」时顺手 @ 了谁，
+ * 不应被静默变成图生图。
+ * @param {Object|null} e - 消息事件对象
+ * @param {string[]} modelUrls - 模型传入的 image_urls
+ * @param {number} limit - 最大图片数
+ * @returns {Promise<string[]>} 补齐后的参考图列表
+ */
+async function resolveReferenceImages(e, modelUrls, limit) {
+    if (modelUrls.length > 0) return modelUrls.slice(0, limit)
+    if (!e) return modelUrls.slice(0, limit)
+    try {
+        const imageGen = await getImageGen()
+        const collected = await imageGen.collectMessageImages(e)
+        if (collected.length > 0) {
+            logger.debug(`[ImageGen工具] 模型未提供 image_urls，已从消息兜底收集 ${collected.length} 张参考图`)
+        }
+        return collected.slice(0, limit)
+    } catch (err) {
+        logger.warn(`[ImageGen工具] 兜底收集参考图失败: ${err.message}`)
+        return modelUrls.slice(0, limit)
     }
 }
 
@@ -106,7 +138,8 @@ export const imageGenTools = [
                 const imageGen = await getImageGen()
                 injectEvent(imageGen, e)
 
-                const genType = image_urls.length > 0 ? 'img2img' : 'text2img'
+                const referenceUrls = await resolveReferenceImages(e, image_urls, imageGen.maxImages)
+                const genType = referenceUrls.length > 0 ? 'img2img' : 'text2img'
 
                 if (auto_send && e) {
                     const recallDelay = imageGen.getRecallDelay(60)
@@ -119,7 +152,7 @@ export const imageGenTools = [
 
                 const result = await imageGen.generateImage({
                     prompt,
-                    imageUrls: image_urls.slice(0, imageGen.maxImages),
+                    imageUrls: referenceUrls,
                     genType,
                     options: { size, quality, style, n, response_format }
                 })
@@ -201,7 +234,10 @@ export const imageGenTools = [
                     })
                 }
 
-                const imageUrls = image_url ? [image_url] : []
+                const imageUrls =
+                    image_url !== undefined && image_url !== ''
+                        ? [image_url]
+                        : (await resolveReferenceImages(e, [], 1)).slice(0, 1)
                 const result = await imageGen.generateVideo({ prompt, imageUrls })
 
                 if (!result.success) {
@@ -333,7 +369,9 @@ export const imageGenTools = [
                     }
                 }
 
-                if (preset.needImage && image_urls.length === 0) {
+                const referenceUrls = await resolveReferenceImages(e, image_urls, imageGen.maxImages)
+
+                if (preset.needImage && referenceUrls.length === 0) {
                     return {
                         success: false,
                         error: `预设"${keyword}"需要提供参考图片，请传入 image_urls 参数`,
@@ -355,8 +393,8 @@ export const imageGenTools = [
                 /* 直接调用绘图模块生成图片 */
                 const result = await imageGen.generateImage({
                     prompt: preset.prompt,
-                    imageUrls: image_urls.slice(0, imageGen.maxImages),
-                    genType: image_urls.length > 0 ? 'img2img' : 'text2img'
+                    imageUrls: referenceUrls,
+                    genType: referenceUrls.length > 0 ? 'img2img' : 'text2img'
                 })
 
                 if (!result.success) {

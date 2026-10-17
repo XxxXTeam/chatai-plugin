@@ -13,6 +13,7 @@ import { logService } from '../../services/stats/LogService.js'
 import { toolApprovalService } from '../../services/tools/ToolApprovalService.js'
 import { attachToolMetadata, getToolDefinitionName, getToolIdentity, normalizeAnyToolCallId } from './tooling.js'
 import { normalizeToolExecutionResult, sanitizeToolResultForLog } from '../utils/toolResult.js'
+import { detectImageMagicBytes } from '../utils/imageMagic.js'
 
 /**
  * 生成工具调用ID
@@ -1220,38 +1221,6 @@ async function fetchHistoryImageBytes(url, timeout = HISTORY_IMAGE_FETCH_TIMEOUT
     } finally {
         clearTimeout(timeoutId)
     }
-}
-
-/**
- * 通过文件头魔数识别图片类型
- * @param {Buffer} buffer - 图片字节
- * @returns {string|null} MIME 类型；无法识别时返回 null
- */
-function detectImageMagicBytes(buffer) {
-    if (!buffer || buffer.length < 12) return null
-    if (buffer[0] === 0xff && buffer[1] === 0xd8) return 'image/jpeg'
-    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return 'image/png'
-    if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) return 'image/gif'
-    if (
-        buffer[0] === 0x52 &&
-        buffer[1] === 0x49 &&
-        buffer[2] === 0x46 &&
-        buffer[3] === 0x46 &&
-        buffer[8] === 0x57 &&
-        buffer[9] === 0x45 &&
-        buffer[10] === 0x42 &&
-        buffer[11] === 0x50
-    ) {
-        return 'image/webp'
-    }
-    if (buffer[0] === 0x42 && buffer[1] === 0x4d) return 'image/bmp'
-    // HEIC/AVIF 等 ISO-BMFF 容器：偏移 4 起为 'ftyp'，品牌盒区分具体类型
-    if (buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70) {
-        const brand = buffer.toString('latin1', 8, 12).toLowerCase()
-        if (brand.startsWith('avif') || brand.startsWith('avis')) return 'image/avif'
-        if (brand.startsWith('heic') || brand.startsWith('heix') || brand.startsWith('hevc')) return 'image/heic'
-    }
-    return null
 }
 
 /**

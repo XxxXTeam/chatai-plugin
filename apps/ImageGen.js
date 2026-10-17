@@ -1342,6 +1342,13 @@ export class ImageGen extends plugin {
                                 break
                             }
                             logger.error(`[ImageGen] API响应错误 ${response.status}:`, errorText)
+                            logger.warn(
+                                `[ImageGen] ${logPrefix}请求体诊断: promptType=${typeof prompt}, ` +
+                                    `promptLength=${prompt?.length ?? -1}, ` +
+                                    `prompt=${JSON.stringify(typeof prompt === 'string' ? prompt.substring(0, 120) : prompt)}, ` +
+                                    `payloadKeys=${JSON.stringify(Object.keys(payload))}, ` +
+                                    `imageCount=${currentUrls?.length ?? 0}, model=${apiConf.model}`
+                            )
                             throw new Error(`API 错误 ${response.status}: ${errorText || '未知错误'}`)
                         }
 
@@ -2368,7 +2375,12 @@ export class ImageGen extends plugin {
             await this.sendResult(e, result)
         }
     }
-    async getAllImages(e) {
+    /**
+     * 收集当前消息与被引用消息中的图片 URL。
+     * @param {Object} e - 事件对象
+     * @returns {Promise<string[]>} 图片 URL 列表
+     */
+    async collectMessageImages(e) {
         const urls = []
         const bot = e.bot || globalThis.Bot
 
@@ -2545,6 +2557,20 @@ export class ImageGen extends plugin {
                 urls.push(imgUrl)
             }
         }
+
+        return urls
+    }
+
+    /**
+     * 收集参考图
+     * 在 collectMessageImages 的基础上追加头像兜底：消息与引用都没图时，
+     * 依次取 @ 的用户头像、发送者自己的头像。命令路径（#图生图 / #预设）依赖此兜底。
+     * @param {Object} e - 事件对象
+     * @returns {Promise<string[]>} 图片 URL 列表
+     */
+    async getAllImages(e) {
+        const urls = await this.collectMessageImages(e)
+        const msgArray = Array.isArray(e.message) ? e.message : []
 
         // 只有在没有其他图片时，才添加@用户头像
         if (urls.length === 0) {

@@ -5,38 +5,8 @@ import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
 import config from '../../../config/config.js'
 import { redisClient } from '../../core/cache/RedisClient.js'
+import { detectImageMagicBytes } from '../../core/utils/imageMagic.js'
 import { assertSafeUrl } from '../../mcp/tools/helpers.js'
-
-/**
- * 根据文件头魔数识别图片 MIME 类型。
- * @param {Buffer} buffer - 图片字节
- * @returns {string|null} MIME 类型；无法识别时返回 null
- */
-function detectImageMagic(buffer) {
-    if (!buffer || buffer.length < 8) return null
-    // JPEG: FF D8
-    if (buffer[0] === 0xff && buffer[1] === 0xd8) return 'image/jpeg'
-    // PNG: 89 50 4E 47
-    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return 'image/png'
-    // GIF: 47 49 46
-    if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) return 'image/gif'
-    // WebP: RIFF....WEBP
-    if (
-        buffer[0] === 0x52 &&
-        buffer[1] === 0x49 &&
-        buffer[2] === 0x46 &&
-        buffer[3] === 0x46 &&
-        buffer[8] === 0x57 &&
-        buffer[9] === 0x45 &&
-        buffer[10] === 0x42 &&
-        buffer[11] === 0x50
-    ) {
-        return 'image/webp'
-    }
-    // BMP: 42 4D
-    if (buffer[0] === 0x42 && buffer[1] === 0x4d) return 'image/bmp'
-    return null
-}
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -516,13 +486,14 @@ export class ImageService {
      * @param {Object} options - 选项
      * @param {boolean} options.forceBase64 - 强制转为base64
      * @param {number} options.timeout - 超时时间
-     * @returns {Promise<{url: string, converted: boolean, error?: string}>}
+     * @param {number} options.maxBytes - 读取字节上限，默认取实例的 maxSize
+     * @returns {Promise<{url: string, converted: boolean, isLocal?: boolean, error?: string}>}
      */
     async prepareImageForApi(url, options = {}) {
         const {
             forceBase64 = false,
             timeout = 15000,
-            probeBytes = 4 * 1024 // 探测读取的前多少字节，用于判断文件头是否完整
+            maxBytes = this.maxSize // 读取字节上限，默认与 uploadImage 的大小上限一致
         } = options
 
         if (!url) {
@@ -541,36 +512,20 @@ export class ImageService {
             }
             return { url: '', converted: false, error: '本地文件不存在' }
         }
+        const fetched = await this.probeImageHeader(url, { timeout, maxBytes })
+        if (!fetched.ok) {
+            logger.debug('[ImageService] 图片获取失败:', url.substring(0, 80), fetched.error)
+            return { url: '', converted: false, error: `无法获取图片: ${fetched.error}` }
+        }
         if (forceBase64) {
-            try {
-                const base64Url = await this.urlToBase64(url)
-                return { url: base64Url, converted: true }
-            } catch (err) {
-                return { url: '', converted: false, error: err.message }
-            }
+            const dataUrl = `data:${fetched.mimeType};base64,${fetched.data}`
+            return { url: dataUrl, converted: true }
         }
-        const probe = await this.probeImageHeader(url, { timeout, maxBytes: probeBytes })
-
-        if (probe.ok && probe.mimeType) {
-            if (this.shouldConvertToBase64(url)) {
-                try {
-                    const base64Url = await this.urlToBase64(url)
-                    return { url: base64Url, converted: true }
-                } catch (err) {
-                    logger.warn('[ImageService] 转base64失败，使用原URL:', err.message)
-                    return { url, converted: false }
-                }
-            }
-            return { url, converted: false }
+        if (this.shouldConvertToBase64(url)) {
+            const dataUrl = `data:${fetched.mimeType};base64,${fetched.data}`
+            return { url: dataUrl, converted: true }
         }
-        logger.debug('[ImageService] 图片头探测失败，转为base64:', url.substring(0, 80), probe.error)
-        try {
-            const base64Url = await this.urlToBase64(url)
-            return { url: base64Url, converted: true }
-        } catch (err) {
-            logger.error('[ImageService] 转base64失败:', err.message)
-            return { url: '', converted: false, error: `无法获取图片: ${probe.error || err.message}` }
-        }
+        return { url, converted: false }
     }
 
     /**
@@ -598,15 +553,14 @@ export class ImageService {
     }
 
     /**
-     * 探测图片 URL 的前若干字节，判断可直接访问性并识别文件类型。
      * @param {string} url - 图片 URL
      * @param {Object} options - 选项
      * @param {number} options.timeout - 超时(ms)
-     * @param {number} options.maxBytes - 读取上限
-     * @returns {Promise<{ok: boolean, mimeType?: string, error?: string}>}
+     * @param {number} options.maxBytes - 读取字节上限，默认取实例的 maxSize
+     * @returns {Promise<{ok: boolean, mimeType: string, data: string, error?: string}>} data 为 base64 字符串
      */
     async probeImageHeader(url, options = {}) {
-        const { timeout = 15000, maxBytes = 4096 } = options
+        const { timeout = 15000, maxBytes = this.maxSize } = options
         const isQQPic =
             url.includes('gchat.qpic.cn') ||
             url.includes('c2cpicdw.qpic.cn') ||
@@ -621,21 +575,36 @@ export class ImageService {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                     Accept: 'image/*',
-                    ...(referer && { Referer: referer }),
-                    Range: `bytes=0-${maxBytes - 1}`
+                    ...(referer && { Referer: referer })
                 }
             })
             if (!response.ok && response.status !== 206) {
-                return { ok: false, error: `HTTP ${response.status}` }
+                return { ok: false, mimeType: 'image/jpeg', data: '', error: `HTTP ${response.status}` }
             }
+
+            const declaredLength = Number(response.headers.get('content-length'))
+            if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+                return { ok: false, mimeType: 'image/jpeg', data: '', error: '图片超出大小上限' }
+            }
+
             const buffer = Buffer.from(await response.arrayBuffer())
-            const mimeType = detectImageMagic(buffer)
-            if (!mimeType) {
-                return { ok: false, error: '无法识别图片文件头' }
+            if (buffer.length === 0 || buffer.length > maxBytes) {
+                return { ok: false, mimeType: 'image/jpeg', data: '', error: '响应体为空或超出大小上限' }
             }
-            return { ok: true, mimeType }
+
+            const magicMime = detectImageMagicBytes(buffer)
+            const headerMime = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
+            if (!magicMime && !headerMime.startsWith('image/')) {
+                return { ok: false, mimeType: 'image/jpeg', data: '', error: '非图片内容' }
+            }
+            return { ok: true, mimeType: magicMime || headerMime, data: buffer.toString('base64') }
         } catch (err) {
-            return { ok: false, error: err.name === 'AbortError' ? '探测超时' : err.message }
+            return {
+                ok: false,
+                mimeType: 'image/jpeg',
+                data: '',
+                error: err.name === 'AbortError' ? '请求超时' : err.message
+            }
         } finally {
             clearTimeout(timer)
         }

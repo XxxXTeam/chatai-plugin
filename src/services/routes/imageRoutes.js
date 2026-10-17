@@ -325,7 +325,14 @@ router.delete('/remote-presets/:source/:uid', async (req, res) => {
 router.post('/generate', async (req, res) => {
     try {
         const { prompt, options } = req.body
-        if (!prompt) return res.status(400).json(ChaiteResponse.fail(null, 'prompt is required'))
+        if (!prompt) {
+            chatLogger.warn(
+                `[绘图路由] prompt 为空，本地拦截 400: bodyKeys=${JSON.stringify(Object.keys(req.body || {}))}, ` +
+                    `promptType=${typeof prompt}, prompt=${JSON.stringify(prompt)}, ` +
+                    `optionsKeys=${JSON.stringify(Object.keys(options || {}))}`
+            )
+            return res.status(400).json(ChaiteResponse.fail(null, 'prompt is required'))
+        }
 
         const { ImageGen } = await import('../../../apps/ImageGen.js')
         const imageGen = new ImageGen()
