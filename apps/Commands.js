@@ -25,20 +25,18 @@ import { getRecentQQBotMessages } from '../src/services/storage/MessageCache.js'
 const debugSessions = new Map() // key: groupId或`private_${userId}`, value: boolean
 
 /**
- * 结束对话前的记忆结算：从会话中读取 user/assistant 消息，达 3 条时
+ * 结束对话后的后台记忆结算：使用清理前捕获的 user/assistant 消息快照，达 3 条时
  * 交给 memorySummarizer.onConversationEnd 提取（图谱 + 规则/LLM 记忆）。
- * 会话为共享群时按 sender.user_id 只取当前用户可归属的轮次。
+ * 会话为共享群时由调用方按 sender.user_id 只取当前用户可归属的轮次。
  *
  * @param {string} userId - 消息发送者标识
  * @param {string|null} groupId - 群Id（私聊为 null）
  * @param {string} conversationId - 会话Id（`group:<gid>` / `user:<uid>` 等）
+ * @param {Array} validMessages - 清理前捕获的用户归属消息快照
  * @returns {Promise<void>}
  */
-async function settleConversationMemory(userId, groupId, conversationId) {
+async function settleConversationMemory(userId, groupId, conversationId, validMessages) {
     try {
-        const validMessages = databaseService
-            .getMessagesForUser(conversationId, userId, 1000)
-            .filter(m => m.role === 'user' || m.role === 'assistant')
         const userMsgCount = validMessages.filter(m => m.role === 'user').length
 
         if (validMessages.length < 3 || userMsgCount === 0) {
@@ -387,12 +385,19 @@ export class AICommands extends plugin {
             const userMsgCount = messages.filter(m => m.role === 'user').length
             const assistantMsgCount = messages.filter(m => m.role === 'assistant').length
 
-            // 结束对话先结算再清：清历史前把有效对话交给记忆提取（图谱 + 记忆），
-            // 结算失败不影响后续清历史（settleConversationMemory 内部已 try/catch）
-            await settleConversationMemory(userId, groupId, conversationId)
+            // 清理前保留按用户归属筛选的快照，避免后台结算读取到新会话。
+            let memoryMessages = []
+            try {
+                memoryMessages = databaseService
+                    .getMessagesForUser(conversationId, userId, 1000)
+                    .filter(m => m.role === 'user' || m.role === 'assistant')
+            } catch (snapshotErr) {
+                logger.warn('[AI-Commands] 读取结束对话记忆快照失败（不影响清历史）:', snapshotErr.message)
+            }
 
-            // 执行清理
+            // 先完成真正的清理，再后台结算记忆，不等待模型网络请求。
             await chatService.clearHistory(userId, groupId)
+            void settleConversationMemory(userId, groupId, conversationId, memoryMessages)
 
             // 构建反馈信息
             const feedbackLines = [

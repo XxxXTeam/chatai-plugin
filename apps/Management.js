@@ -523,31 +523,40 @@ export class AIManagement extends plugin {
      */
     async endConversation() {
         try {
-            // 先结算（>=3 条有效 user/assistant 消息时提取图谱与记忆），失败不影响清历史
+            const userId = String(this.e.user_id ?? '')
+            const groupId = this.e.group_id || null
+            let validMessages = []
+            // 清理前读取独立快照；后台记忆任务不能再从已清除/新建的会话读取历史。
             databaseService.init()
             try {
-                const userId = String(this.e.user_id ?? '')
-                const groupId = this.e.group_id || null
                 const conversationId = contextManager.getConversationId(userId, groupId)
-                const validMessages = databaseService
+                validMessages = databaseService
                     .getMessagesForUser(conversationId, userId, 1000)
                     .filter(msg => msg.role === 'user' || msg.role === 'assistant')
-
-                if (validMessages.length >= 3 && validMessages.some(msg => msg.role === 'user')) {
-                    const { memorySummarizer } = await import('../src/services/memory/MemorySummarizer.js')
-                    const settleResult = await memorySummarizer.onConversationEnd(userId, validMessages, {
-                        groupId: groupId ? String(groupId) : null,
-                        summarize: true
-                    })
-                    logger.debug(
-                        `[Management] 结束对话记忆结算: ${validMessages.length} 条有效消息, 提取=${settleResult.extractedCount}`
-                    )
-                }
-            } catch (settleErr) {
-                logger.warn('[Management] 结束对话记忆结算失败（不影响清历史）:', settleErr.message)
+            } catch (snapshotErr) {
+                logger.warn('[Management] 读取结束对话记忆快照失败（不影响清历史）:', snapshotErr.message)
             }
 
-            await chatService.clearHistory(this.e.user_id?.toString(), this.e.group_id || null)
+            await chatService.clearHistory(this.e.user_id?.toString(), groupId)
+
+            // 只有上下文真正清除后才启动结算；模型耗时/失败不阻塞命令确认。
+            if (validMessages.length >= 3 && validMessages.some(msg => msg.role === 'user')) {
+                void import('../src/services/memory/MemorySummarizer.js')
+                    .then(({ memorySummarizer }) =>
+                        memorySummarizer.onConversationEnd(userId, validMessages, {
+                            groupId: groupId ? String(groupId) : null,
+                            summarize: true
+                        })
+                    )
+                    .then(settleResult => {
+                        logger.debug(
+                            `[Management] 结束对话后台记忆结算: ${validMessages.length} 条有效消息, 提取=${settleResult.extractedCount}`
+                        )
+                    })
+                    .catch(settleErr => {
+                        logger.warn('[Management] 结束对话后台记忆结算失败:', settleErr.message)
+                    })
+            }
             await this.reply('已结束当前对话，上下文已清除。', true)
         } catch (err) {
             await this.reply(`结束对话失败: ${err.message}`, true)
