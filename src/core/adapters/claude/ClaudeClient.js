@@ -185,6 +185,7 @@ export class ClaudeClient extends AbstractClient {
         const requestPayload = {
             model,
             max_tokens: options.maxToken || 4096,
+            cache_control: { type: 'ephemeral' },
             system: systemPrompt || undefined,
             messages,
             tools,
@@ -310,6 +311,7 @@ export class ClaudeClient extends AbstractClient {
         const requestPayload = {
             model,
             max_tokens: options.maxToken || 4096,
+            cache_control: { type: 'ephemeral' },
             system: systemPrompt || undefined,
             messages,
             tools,

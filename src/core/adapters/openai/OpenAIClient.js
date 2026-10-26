@@ -550,17 +550,20 @@ export class OpenAIClient extends AbstractClient {
         return this.buildOpenAIClientOptions(apiKey, mergedHeaders, channelProxy, this.getOpenAIResponsePath())
     }
 
-    openAIMessageContentToResponseInputContent(content) {
+    openAIMessageContentToResponseInputContent(content, role = 'user') {
+        // Responses 历史中的 assistant 文本属于输出，不能使用 input_text。
+        const textType = role === 'assistant' ? 'output_text' : 'input_text'
         if (typeof content === 'string') {
-            return [{ type: 'input_text', text: content }]
+            return [{ type: textType, text: content }]
         }
         if (!Array.isArray(content)) {
-            return [{ type: 'input_text', text: content ? String(content) : '' }]
+            return [{ type: textType, text: content ? String(content) : '' }]
         }
         return content
             .map(item => {
                 if (!item || typeof item !== 'object') return null
-                if (item.type === 'text') return { type: 'input_text', text: item.text || '' }
+                if (item.type === 'text' || (role === 'assistant' && item.type === 'input_text'))
+                    return { type: textType, text: item.text || '' }
                 if (item.type === 'image_url')
                     return { type: 'input_image', image_url: item.image_url?.url || item.url || '' }
                 if (item.type === 'input_audio') return { type: 'input_audio', input_audio: item.input_audio }
@@ -597,7 +600,7 @@ export class OpenAIClient extends AbstractClient {
                 items.push({
                     type: 'message',
                     role: message.role === 'developer' ? 'system' : message.role,
-                    content: this.openAIMessageContentToResponseInputContent(message.content)
+                    content: this.openAIMessageContentToResponseInputContent(message.content, message.role)
                 })
             }
 
