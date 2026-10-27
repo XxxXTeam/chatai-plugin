@@ -1343,6 +1343,11 @@ export class ChatService {
                     success: !log.isError
                 }))
             }
+        } catch (err) {
+            // 委托器失败时直接 throw lastError，下方 finally 的统计取不到（会记成"未知错误"）。
+            // 这里同步捕获的异常到 lastError 后原样抛出，保证调用统计/响应详情保留真实错误。
+            lastError = lastError || err
+            throw err
         } finally {
             // 委托器已统一 startRequest/endRequest；此处仅补充渠道使用统计
             if (channel) {
