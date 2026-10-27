@@ -173,7 +173,9 @@ export class bym extends plugin {
 
         let forceTriggered = false
         let matchedKeyword = ''
-        if (allKeywords.length > 0 && rawMsg) {
+        // 关键词只用于正常对话触发；伪人模式默认只走概率，避免同一条消息被两路同时处理
+        const keywordForceEnabled = config.get('bym.keywordTrigger') !== false
+        if (keywordForceEnabled && allKeywords.length > 0 && rawMsg) {
             for (const keyword of allKeywords) {
                 // 支持关键词在消息任意位置（如 "xx小喵xx" 匹配 "小喵"）
                 if (rawMsg.includes(keyword)) {
