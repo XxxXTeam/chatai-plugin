@@ -152,6 +152,7 @@ export class ChatService {
             prefixPersona = null, // 前缀人格（独立于普通人设）
             disableTools = false, // 禁用工具调用（用于防止递归）
             skipHistory = false, // 跳过历史记录（用于事件响应等场景）
+            skipStats = false, // 跳过调用统计（调用方自行记录，避免一次调用产生两条记录）
             skipPersona = false, // 跳过人设获取（用于总结等场景）
             temperature: overrideTemperature, // 覆盖温度参数
             maxTokens: overrideMaxTokens, // 覆盖最大token参数
@@ -1389,50 +1390,54 @@ export class ChatService {
                           })
                         : null
 
-                await statsService.recordApiCall({
-                    channelId: usedChannelForStats?.id || `no-channel-${llmModel}`,
-                    channelName: usedChannelForStats?.name || `无渠道(${llmModel})`,
-                    model: actualUsedModel || llmModel,
-                    reportedModel: upstreamReportedModel,
-                    keyIndex: keyInfo.keyIndex ?? -1,
-                    keyName: keyInfo.keyName || '',
-                    strategy: keyInfo.strategy || '',
-                    duration: requestDuration,
-                    success: requestSuccess,
-                    error: !requestSuccess ? lastError?.message || lastError?.toString() || '未知错误' : null,
-                    source,
-                    userId,
-                    groupId: groupId || null,
-                    stream: useStreaming,
-                    retryCount: actualTotalRetryCount,
-                    channelSwitched: actualChannelSwitched,
-                    fallbackUsed: actualFallbackUsed,
-                    previousChannelId: actualChannelSwitched ? channel?.id : null,
-                    switchChain: formattedSwitchChain,
-                    apiUsage: finalUsage,
-                    messages,
-                    responseText,
-                    // 请求详情
-                    request: {
-                        messages,
+                if (!skipStats)
+                    await statsService.recordApiCall({
+                        channelId: usedChannelForStats?.id || `no-channel-${llmModel}`,
+                        channelName: usedChannelForStats?.name || `无渠道(${llmModel})`,
                         model: actualUsedModel || llmModel,
-                        tools: hasTools
-                            ? client.tools.map(t => ({ name: t.name, description: t.description?.substring(0, 100) }))
-                            : null,
-                        temperature: requestOptions.temperature,
-                        maxToken: requestOptions.maxToken,
-                        topP: requestOptions.topP,
-                        systemPrompt: systemPrompt?.substring(0, 500) + (systemPrompt?.length > 500 ? '...' : '')
-                    },
-                    response: !requestSuccess
-                        ? {
-                              error: lastError?.message || lastError?.toString() || '未知错误',
-                              code: lastError?.code || lastError?.status || null,
-                              type: lastError?.type || lastError?.name || null,
-                              contents: finalResponse
-                          }
-                        : null
-                })
+                        reportedModel: upstreamReportedModel,
+                        keyIndex: keyInfo.keyIndex ?? -1,
+                        keyName: keyInfo.keyName || '',
+                        strategy: keyInfo.strategy || '',
+                        duration: requestDuration,
+                        success: requestSuccess,
+                        error: !requestSuccess ? lastError?.message || lastError?.toString() || '未知错误' : null,
+                        source,
+                        userId,
+                        groupId: groupId || null,
+                        stream: useStreaming,
+                        retryCount: actualTotalRetryCount,
+                        channelSwitched: actualChannelSwitched,
+                        fallbackUsed: actualFallbackUsed,
+                        previousChannelId: actualChannelSwitched ? channel?.id : null,
+                        switchChain: formattedSwitchChain,
+                        apiUsage: finalUsage,
+                        messages,
+                        responseText,
+                        // 请求详情
+                        request: {
+                            messages,
+                            model: actualUsedModel || llmModel,
+                            tools: hasTools
+                                ? client.tools.map(t => ({
+                                      name: t.name,
+                                      description: t.description?.substring(0, 100)
+                                  }))
+                                : null,
+                            temperature: requestOptions.temperature,
+                            maxToken: requestOptions.maxToken,
+                            topP: requestOptions.topP,
+                            systemPrompt: systemPrompt?.substring(0, 500) + (systemPrompt?.length > 500 ? '...' : '')
+                        },
+                        response: !requestSuccess
+                            ? {
+                                  error: lastError?.message || lastError?.toString() || '未知错误',
+                                  code: lastError?.code || lastError?.status || null,
+                                  type: lastError?.type || lastError?.name || null,
+                                  contents: finalResponse
+                              }
+                            : null
+                    })
             } catch (e) {
                 logger.warn(`[ChatService] 记录统计失败:`, e.message)
             }

@@ -521,6 +521,8 @@ ${contextText}
                         ? imageUrls.slice(0, 3).map(url => ({ type: 'image_url', image_url: { url } }))
                         : [],
                 mode: 'bym', // 标记为伪人模式
+                // 伪人模式在下方自行记录统计（含触发信息），避免同一次调用被记成 chat + bym 两条
+                skipStats: true,
                 model: bymModel,
                 prefixPersona: systemPrompt, // 使用伪人系统提示
                 event: e,
