@@ -36,6 +36,22 @@ if (!fs.existsSync(dataDir)) {
 config.startSync(dataDir)
 global.chatgptPluginConfig = config
 registerQQBotMessageCache()
+
+// 启动即初始化 Redis 并等待就绪。
+// 调用统计/历史直接从 Redis 读取，之前只有首次聊天（ChannelManager.init）才建立连接，
+// 因此每次重启后到首条消息前，面板统计一律显示 0（内存缓存为空）。
+try {
+    const { redisClient } = await import('./src/core/cache/RedisClient.js')
+    await redisClient.init()
+    const redisReady = await redisClient.waitForReady(3000)
+    if (redisReady) {
+        chatLogger.info('Redis', '启动时已连接，调用统计可直接读取历史数据')
+    } else if (config.get('redis.enabled')) {
+        chatLogger.warn('Redis', '启动时 Redis 未就绪，统计将暂时回落到内存缓存')
+    }
+} catch (err) {
+    chatLogger.warn('Redis', '启动时初始化失败:', err.message)
+}
 try {
     global._yunzaiCfgCache = (await import('../../lib/config/config.js')).default
 } catch {

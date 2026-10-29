@@ -76,6 +76,39 @@ class RedisClient {
     }
 
     /**
+     * 等待连接就绪（供启动阶段使用）。
+     * init() 只负责创建客户端，连接是异步建立的；启动时需要等 ready，
+     * 否则首个面板请求会读到空数据（统计显示 0）。
+     * @param {number} timeoutMs - 最长等待时间
+     * @returns {Promise<boolean>} 是否已就绪
+     */
+    async waitForReady(timeoutMs = 3000) {
+        if (!this.client) return false
+        if (this.client.status === 'ready') {
+            this.isConnected = true
+            return true
+        }
+
+        const client = this.client
+        return await new Promise(resolve => {
+            let settled = false
+            const finish = ready => {
+                if (settled) return
+                settled = true
+                clearTimeout(timer)
+                client.removeListener('ready', onReady)
+                client.removeListener('end', onEnd)
+                resolve(ready)
+            }
+            const onReady = () => finish(true)
+            const onEnd = () => finish(false)
+            const timer = setTimeout(() => finish(client.status === 'ready'), timeoutMs)
+            client.once('ready', onReady)
+            client.once('end', onEnd)
+        })
+    }
+
+    /**
      * 抑制高频 error 日志：窗口内只输出一条，并在下次输出时汇总被抑制的条数
      * @param {Error} err - Redis 错误
      * @returns {void}
