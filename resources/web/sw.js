@@ -1,9 +1,12 @@
 /* eslint-disable */
 
-const BUILD_VERSION = '9260c3d81639'
+const BUILD_VERSION = '9f52adb101db'
 const CACHE_NAME = 'chatai-assets-' + BUILD_VERSION
 const BASE = '/chatai'
 const PRECACHE = [
+    "/chatai/_next/static/BL0JrBd7jz0PTW6pmoPXl/_buildManifest.js",
+    "/chatai/_next/static/BL0JrBd7jz0PTW6pmoPXl/_clientMiddlewareManifest.json",
+    "/chatai/_next/static/BL0JrBd7jz0PTW6pmoPXl/_ssgManifest.js",
     "/chatai/_next/static/chunks/00fbcb1bf2017dcb.js",
     "/chatai/_next/static/chunks/02454b8be76c511a.js",
     "/chatai/_next/static/chunks/0d28ad2475c6bba9.js",
@@ -11,7 +14,6 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/18f67ae079fad45f.js",
     "/chatai/_next/static/chunks/1cbccc39b319e66a.js",
     "/chatai/_next/static/chunks/1eb7b591a66950f2.js",
-    "/chatai/_next/static/chunks/1fd6208bb729bcab.css",
     "/chatai/_next/static/chunks/250271728d2d959a.js",
     "/chatai/_next/static/chunks/2859f476bcae8cb4.js",
     "/chatai/_next/static/chunks/325b42bcdb06ee6b.js",
@@ -23,7 +25,6 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/38cf7732607c9e48.js",
     "/chatai/_next/static/chunks/3cfc945ce9b50881.js",
     "/chatai/_next/static/chunks/4390b240c9480e87.js",
-    "/chatai/_next/static/chunks/56661f598b58e161.js",
     "/chatai/_next/static/chunks/59dc0458b01adbb4.js",
     "/chatai/_next/static/chunks/5dfbd1d73aa099b3.js",
     "/chatai/_next/static/chunks/5ec12c9b030ee435.js",
@@ -32,6 +33,7 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/664554ed729e29d1.js",
     "/chatai/_next/static/chunks/6d7fc8be57303293.js",
     "/chatai/_next/static/chunks/6eb13248133d59b4.js",
+    "/chatai/_next/static/chunks/76dc462fd7d75f87.js",
     "/chatai/_next/static/chunks/7be36e6ca4e90dfa.js",
     "/chatai/_next/static/chunks/8c7ba8a2f8dd2069.js",
     "/chatai/_next/static/chunks/8f8b3d5442df477b.js",
@@ -68,6 +70,7 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/e34f1471fea685cf.js",
     "/chatai/_next/static/chunks/e4a44689d2601248.js",
     "/chatai/_next/static/chunks/e4acc296f3f56d0c.js",
+    "/chatai/_next/static/chunks/e4f836eadb0eb7b1.css",
     "/chatai/_next/static/chunks/f1ab86f6205d9b07.js",
     "/chatai/_next/static/chunks/f77677b4e0c1d981.js",
     "/chatai/_next/static/chunks/fb8bbad83c699e17.js",
@@ -75,9 +78,6 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/ff1a16fafef87110.js",
     "/chatai/_next/static/chunks/ffc6f60fe91ac0a9.js",
     "/chatai/_next/static/chunks/turbopack-6f7fb830c500f7c9.js",
-    "/chatai/_next/static/lMdDljgVtrMriGVGZqI2V/_buildManifest.js",
-    "/chatai/_next/static/lMdDljgVtrMriGVGZqI2V/_clientMiddlewareManifest.json",
-    "/chatai/_next/static/lMdDljgVtrMriGVGZqI2V/_ssgManifest.js",
     "/chatai/_next/static/media/favicon.0b3bf435.ico",
     "/chatai/favicon.ico",
     "/chatai/file.svg",
