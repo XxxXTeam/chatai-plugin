@@ -1,4 +1,6 @@
 import express from 'express'
+import path from 'node:path'
+import { createChannelDisplayOrderRoutes } from './channelDisplayOrderRoutes.js'
 import { channelManager, normalizeBaseUrl } from '../llm/ChannelManager.js'
 import { delegateRequest } from '../llm/LlmDelegator.js'
 import { statsService } from '../stats/StatsService.js'
@@ -70,6 +72,23 @@ router.post('/', async (req, res) => {
         res.status(500).json(ApiResponse.fail(null, error.message))
     }
 })
+
+// Static display-order routes must precede /:id and retain the parent auth guard.
+router.use(
+    '/display-order',
+    createChannelDisplayOrderRoutes({
+        getFilePath: () => {
+            if (typeof config.dataDir !== 'string' || !path.isAbsolute(config.dataDir)) {
+                throw new Error('Channel display order data directory is not initialized or absolute')
+            }
+            return path.join(config.dataDir, 'channel-display-order.json')
+        },
+        getChannelIds: async () => {
+            await channelManager.init()
+            return channelManager.getAll().map(channel => channel.id)
+        }
+    })
+)
 
 // PUT /api/channels/:id
 router.put('/:id', async (req, res) => {

@@ -19,6 +19,7 @@ data/chaite.db-shm
 data/chaite.db-wal
 data/mcp-servers.json
 data/stats.json
+data/channel-display-order.json
 
 
 sakura-plugin/
