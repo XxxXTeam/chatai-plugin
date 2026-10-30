@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { McpClient } from '../src/mcp/McpClient.js'
+import { chatLogger } from '../src/core/utils/logger.js'
 
 const MODERN_PROTOCOL_VERSION = '2026-07-28'
 const LEGACY_PROTOCOL_VERSION = '2025-11-25'
@@ -328,4 +329,104 @@ test('stdio 探测期间 disconnect 不会在断开后复活正式进程', async
     assert.equal(client.initialized, false)
     assert.equal(fixture.readRequests().filter(request => request.method === 'initialize').length, 0)
     fs.rmSync(fixture.root, { recursive: true, force: true })
+})
+
+async function withStderrClient(t, run) {
+    const entries = []
+    for (const level of ['debug', 'info', 'warn', 'error']) {
+        t.mock.method(chatLogger, level, text => {
+            if (text.startsWith('[MCP] Server stderr: ')) entries.push({ level, text })
+        })
+    }
+    const client = new McpClient({
+        type: 'stdio',
+        command: process.execPath,
+        args: ['-e', 'setInterval(() => {}, 1000)'],
+        autoReconnect: false,
+        timeouts: { terminate: 100 }
+    })
+    try {
+        await client.connectStdio()
+        await run(client.process.stderr, entries)
+    } finally {
+        await client.disconnect()
+    }
+}
+
+test('stdio stderr 按 JSON level 分级，支持同一数据块内多条日志', async t => {
+    await withStderrClient(t, (stderr, entries) => {
+        const levels = ['debug', 'info', 'notice', 'warn', 'warning', 'error', 'critical', 'alert', 'emergency']
+        stderr.emit('data', Buffer.from(levels.map(level => JSON.stringify({ level, message: level })).join('\n') + '\n'))
+        assert.deepEqual(entries.map(entry => entry.level), ['debug', 'info', 'info', 'warn', 'warn', 'error', 'error', 'error', 'error'])
+    })
+})
+
+test('stdio stderr 缓冲拆分的 JSON 和跨字节中文，逐行处理 CRLF', async t => {
+    await withStderrClient(t, (stderr, entries) => {
+        const line = JSON.stringify({ level: 'info', message: '中文日志' })
+        const bytes = Buffer.from(line + '\r\n\n')
+        const splitAt = bytes.indexOf(Buffer.from('中')) + 1
+        stderr.emit('data', bytes.subarray(0, splitAt))
+        assert.equal(entries.length, 0)
+        stderr.emit('data', bytes.subarray(splitAt))
+        assert.deepEqual(entries, [{ level: 'info', text: `[MCP] Server stderr: ${line}` }])
+    })
+})
+
+test('stdio stderr 未知级别、非 JSON 和异常结构仍保留为 warn', async t => {
+    await withStderrClient(t, (stderr, entries) => {
+        const lines = ['plain failure', '{broken json', 'null', '[]', '{"message":"missing level"}', '{"level":"unknown"}', '{"level":"constructor"}', '{"level":"__proto__"}']
+        stderr.emit('data', Buffer.from(lines.join('\n') + '\n'))
+        assert.deepEqual(entries.map(entry => entry.level), lines.map(() => 'warn'))
+        assert.deepEqual(entries.map(entry => entry.text), lines.map(line => `[MCP] Server stderr: ${line}`))
+    })
+})
+
+test('stdio stderr 流结束时刷新没有换行的最后一条日志且只输出一次', async t => {
+    await withStderrClient(t, (stderr, entries) => {
+        const line = JSON.stringify({ level: 'error', message: 'final failure' })
+        stderr.emit('data', Buffer.from(line))
+        assert.equal(entries.length, 0)
+        stderr.emit('end')
+        stderr.emit('close')
+        assert.deepEqual(entries, [{ level: 'error', text: `[MCP] Server stderr: ${line}` }])
+    })
+})
+
+test('stdio stderr 无换行长输出有界缓冲且不丢失内容', async t => {
+    await withStderrClient(t, (stderr, entries) => {
+        const text = 'x'.repeat(65536 * 2 + 17)
+        stderr.emit('data', Buffer.from(text))
+        assert.ok(entries.length > 0)
+        stderr.emit('end')
+        assert.ok(entries.every(entry => entry.level === 'warn' && entry.text.length <= 65536 + '[MCP] Server stderr: '.length))
+        assert.equal(entries.map(entry => entry.text.slice('[MCP] Server stderr: '.length)).join(''), text)
+    })
+})
+
+test('stdio stderr 65536 码元分片不拆开 emoji 代理对', async t => {
+    await withStderrClient(t, (stderr, entries) => {
+        const text = 'x'.repeat(65535) + '😀tail'
+        stderr.emit('data', Buffer.from(text))
+        assert.ok(entries.length > 0)
+        stderr.emit('end')
+        const encoded = Buffer.concat(
+            entries.map(entry => Buffer.from(entry.text.slice('[MCP] Server stderr: '.length), 'utf8'))
+        )
+        assert.equal(encoded.subarray(65535).toString('utf8'), '😀tail')
+        assert.deepEqual(encoded, Buffer.from(text))
+    })
+})
+
+test('stdio stderr 不同子进程的未完成日志不串包', async t => {
+    await withStderrClient(t, async (first, entries) => {
+        first.emit('data', Buffer.from('{"level":"info",'))
+        first.emit('end')
+        first.emit('close')
+        await withStderrClient(t, (second, secondEntries) => {
+            second.emit('data', Buffer.from('{"level":"debug","message":"new process"}\n'))
+            assert.deepEqual(secondEntries.map(entry => entry.level), ['debug'])
+        })
+        assert.deepEqual(entries.map(entry => entry.level), ['warn'])
+    })
 })
