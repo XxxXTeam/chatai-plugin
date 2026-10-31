@@ -7,8 +7,20 @@ const history = [
     { role: 'user', content: [{ type: 'text', text: 'cache probe' }] }
 ]
 
+const tools = [
+    {
+        type: 'function',
+        function: {
+            name: 'probe_tool',
+            description: 'probe',
+            parameters: { type: 'object', properties: {} }
+        }
+    }
+]
+
 function createClient(fetch) {
-    const client = new ClaudeClient({ apiKey: 'unit-test-key', baseUrl: 'https://cache-probe.invalid/v1' })
+    const client = new ClaudeClient({ apiKey: 'cache-test-key', baseUrl: 'https://cache-probe.invalid/v1' })
+    client.tools = tools
     client.buildClaudeClientOptions = apiKey => ({
         apiKey,
         baseURL: 'https://cache-probe.invalid',
@@ -34,7 +46,19 @@ function messageResponse() {
     )
 }
 
-test('non-stream Claude requests opt in to ephemeral prompt caching', async () => {
+/**
+ * 中转（New API → CommandCode）只认内容块上的 cache_control，
+ * 顶层 automatic caching 会被忽略，因此断言必须是显式断点。
+ */
+function assertExplicitCacheBreakpoints(requestPayload) {
+    assert.equal(requestPayload.cache_control, undefined)
+    assert.ok(Array.isArray(requestPayload.system), 'system 应转换为内容块数组')
+    assert.deepEqual(requestPayload.system.at(-1).cache_control, { type: 'ephemeral' })
+    assert.deepEqual(requestPayload.tools.at(-1).cache_control, { type: 'ephemeral' })
+    assert.deepEqual(requestPayload.messages.at(-1).content.at(-1).cache_control, { type: 'ephemeral' })
+}
+
+test('non-stream Claude requests send explicit cache breakpoints', async () => {
     let requestPayload
     const client = createClient(async (_url, init) => {
         requestPayload = JSON.parse(init.body)
@@ -43,10 +67,10 @@ test('non-stream Claude requests opt in to ephemeral prompt caching', async () =
 
     await client._sendMessage(history, 'unit-test-key', { model: 'claude-haiku-5.5', maxToken: 32 })
 
-    assert.deepEqual(requestPayload.cache_control, { type: 'ephemeral' })
+    assertExplicitCacheBreakpoints(requestPayload)
 })
 
-test('streaming Claude requests opt in to ephemeral prompt caching', async () => {
+test('streaming Claude requests send explicit cache breakpoints', async () => {
     let requestPayload
     const client = createClient(async (_url, init) => {
         requestPayload = JSON.parse(init.body)
@@ -58,5 +82,5 @@ test('streaming Claude requests opt in to ephemeral prompt caching', async () =>
         // Consume the complete mocked stream.
     }
 
-    assert.deepEqual(requestPayload.cache_control, { type: 'ephemeral' })
+    assertExplicitCacheBreakpoints(requestPayload)
 })
