@@ -5,7 +5,13 @@
 
 import fs from 'fs'
 import { StandardBotApi, StandardMessage as segment } from '../../core/platform/index.js'
-import { fetchWithLimit, resolveSandboxPath, PLUGIN_ROOT } from './helpers.js'
+import {
+    fetchWithLimit,
+    resolveSandboxPath,
+    PLUGIN_ROOT,
+    collectEventImageUrls,
+    decodeInlineImageRef
+} from './helpers.js'
 import { cleanupTemporaryDownload, downloadToManagedCache, fetchDownloadResponse, isTemporaryDownload } from './file.js'
 
 /** download_image 请求超时（毫秒） */
@@ -105,20 +111,14 @@ export const mediaTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
+                const api = StandardBotApi.fromContext(ctx)
 
-                // 从消息中获取图片
+                // args.image_url 优先；否则从当前消息及其引用消息中收集
                 let images = []
                 if (args.image_url) {
                     images = [args.image_url]
-                } else if (e?.img?.length > 0) {
-                    images = e.img.map(img => img.url || img.file || img)
-                } else if (e?.message) {
-                    // 从消息段中提取
-                    for (const seg of e.message) {
-                        if (seg.type === 'image') {
-                            images.push(seg.url || seg.file || seg.data?.url)
-                        }
-                    }
+                } else {
+                    images = await collectEventImageUrls(e, api)
                 }
 
                 if (images.length === 0) {
@@ -133,10 +133,18 @@ export const mediaTools = [
 
                     if (args.to_base64) {
                         try {
-                            const downloaded = await fetchBinaryWithLimit(url)
-                            result.base64 = `data:${downloaded.contentType};base64,${downloaded.buffer.toString('base64')}`
-                            result.mimeType = downloaded.contentType
-                            result.size = downloaded.buffer.length
+                            // data:/base64:// 已在本地内联，直接解析，不联网
+                            const inline = decodeInlineImageRef(url, DOWNLOAD_MAX_BYTES)
+                            if (inline) {
+                                result.base64 = inline.dataUrl
+                                result.mimeType = inline.mimeType
+                                result.size = inline.size
+                            } else {
+                                const downloaded = await fetchBinaryWithLimit(url)
+                                result.base64 = `data:${downloaded.contentType};base64,${downloaded.buffer.toString('base64')}`
+                                result.mimeType = downloaded.contentType
+                                result.size = downloaded.buffer.length
+                            }
                         } catch (err) {
                             result.error = err.message
                         }

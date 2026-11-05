@@ -251,6 +251,116 @@ export async function fetchWithLimit(url, options = {}, limits) {
     }
 }
 
+/** 内联图片 base64 的合法字符集（兼容标准与 URL-safe 字母表） */
+const INLINE_BASE64_PATTERN = /^[A-Za-z0-9+/_-]+={0,2}$/
+
+/**
+ * 将候选图片引用去除空白、剥离 file:// 前缀后登记到去重集合。
+ * @param {Set<string>} collected - 已收集引用集合
+ * @param {*} ref - 候选引用
+ * @returns {void}
+ */
+function addImageRef(collected, ref) {
+    if (typeof ref !== 'string') return
+    const value = ref.trim().replace(/^file:\/\//i, '')
+    if (value) collected.add(value)
+}
+
+/**
+ * 从消息段数组中只收集 image 段的图片引用。
+ * 段既可能是 `{ type: 'image', data: { url } }`，也可能是 `{ type: 'image', url }` 扁平结构。
+ * @param {Array} segments - 消息段数组
+ * @param {Set<string>} collected - 已收集引用集合
+ * @returns {void}
+ */
+function collectImageRefsFromSegments(segments, collected) {
+    if (!Array.isArray(segments)) return
+    for (const seg of segments) {
+        if (!seg || typeof seg !== 'object' || seg.type !== 'image') continue
+        addImageRef(collected, seg.data?.url || seg.url || seg.data?.file || seg.file || seg.data?.path || seg.path)
+    }
+}
+
+/**
+ * 从当前事件及其引用消息中收集图片引用。
+ * 先看当前消息，取不到时回退到引用消息；只收集 image 段。
+ * 引用消息获取失败不影响调用方，返回已收集到的部分。
+ * @param {Object|null} event - Yunzai 事件
+ * @param {StandardBotApi} api - 标准接口
+ * @returns {Promise<string[]>} 图片引用列表（去重，保持顺序）
+ */
+export async function collectEventImageUrls(event, api) {
+    const collected = new Set()
+    try {
+        const images = Array.isArray(event?.img) ? event.img : event?.img ? [event.img] : []
+        for (const img of images) {
+            if (typeof img === 'string') {
+                addImageRef(collected, img)
+            } else if (img && typeof img === 'object') {
+                addImageRef(collected, img.url || img.file || img.path)
+            }
+        }
+        collectImageRefsFromSegments(event?.message, collected)
+
+        // 当前消息没有任何图片时才回退到引用消息，避免把引用图误当成当前输入
+        if (collected.size === 0 && typeof api?.getReplyMessage === 'function') {
+            const reply = await api.getReplyMessage()
+            const replySegments = reply?.message || reply?.content || reply?.data?.message || reply?.data?.content || []
+            collectImageRefsFromSegments(replySegments, collected)
+        }
+    } catch (error) {
+        logger.debug(`[helpers] 收集引用消息图片失败: ${error.message}`)
+    }
+    return [...collected]
+}
+
+/**
+ * 解码内联图片引用（data: URL 或 base64://），不发起任何网络请求。
+ * 非内联引用返回 null，由调用方走各自的下载或报错路径。
+ * @param {string} value - 图片引用
+ * @param {number} [maxBytes=Infinity] - 解码后字节数上限
+ * @returns {{dataUrl: string, mimeType: string, size: number}|null} 解码结果；非内联引用为 null
+ * @throws {Error} base64 内容非法、为空或超过大小上限时抛出
+ */
+export function decodeInlineImageRef(value, maxBytes = Infinity) {
+    const ref = typeof value === 'string' ? value.trim() : ''
+    if (!ref) return null
+
+    let mimeType = ''
+    let payload = ''
+    if (/^data:/i.test(ref)) {
+        const match = ref.match(/^data:([^;,]*)(?:;[^;,]*)*;base64,([\s\S]*)$/i)
+        if (!match) throw new Error('无效的 data URL，仅支持 base64 编码的内容')
+        mimeType = match[1] || 'image/png'
+        payload = match[2]
+    } else if (/^base64:\/\//i.test(ref)) {
+        mimeType = 'image/png'
+        payload = ref.slice('base64://'.length)
+    } else {
+        return null
+    }
+
+    const normalized = payload.replace(/\s+/g, '')
+    if (!normalized || !INLINE_BASE64_PATTERN.test(normalized)) {
+        throw new Error('内联图片 base64 内容非法')
+    }
+    // 先按 base64 膨胀率估算，避免超限内容在解码阶段就占用大量内存
+    if (Number.isFinite(maxBytes) && normalized.length > Math.ceil((maxBytes * 4) / 3) + 4) {
+        throw new Error(`内联图片过大: 超过上限 ${maxBytes} 字节`)
+    }
+    const buffer = Buffer.from(normalized, 'base64')
+    if (buffer.length === 0) throw new Error('内联图片 base64 内容为空')
+    if (Number.isFinite(maxBytes) && buffer.length > maxBytes) {
+        throw new Error(`内联图片过大: ${buffer.length} 字节，上限 ${maxBytes} 字节`)
+    }
+
+    return {
+        dataUrl: `data:${mimeType};base64,${buffer.toString('base64')}`,
+        mimeType,
+        size: buffer.length
+    }
+}
+
 /**
  * 插件根目录（本文件位于 <root>/src/mcp/tools/helpers.js，上溯三层）
  * 不使用 process.cwd()，避免 Yunzai 启动目录变化导致沙箱边界漂移

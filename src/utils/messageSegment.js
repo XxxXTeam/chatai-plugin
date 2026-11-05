@@ -24,6 +24,12 @@ for (const group of BREAK_LEVELS) {
 }
 
 /**
+ * 句末标点集合。「全部按句输出」按这些字符切句，句末标点归前段。
+ * @type {Set<string>}
+ */
+const SENTENCE_END_CHARS = new Set(['。', '！', '？', '!', '?', '…'])
+
+/**
  * 发言头行：QQ 聊天记录复制体中常见的「昵称: 日期 时间」
  * （如 `我是残花: 09-20 22:19:45`），兼容四位年份与斜杠分隔。
  * @type {RegExp}
@@ -324,13 +330,109 @@ export function splitMessage(text, options = {}) {
 }
 
 /**
- * 按句拆分的兼容入口：同样以「发言单元」优先，普通文本按句末标点分段。
+ * 按句末标点切句，不依赖长度阈值。
+ *
+ * 与 `splitMessage` 的区别：后者在 `length <= maxChunk` 时直接返回单段，
+ * 因此短回复永远不会被切开。本函数无视长度，只在句末标点与连续空行处切分。
+ * CQ 码、代码围栏、URL 等保护区间内不切；过短片段（≤ mergeThreshold）并入上一段，
+ * 避免「诶嘿嘿。」这类短句单独成条。
+ * @param {string} text - 待切分文本
+ * @param {Object} options - 切分选项
+ * @param {number} [options.mergeThreshold=8] - 短片段合并阈值
+ * @returns {string[]} 句子数组（已 trim，空段剔除，CQ 码完整还原）
+ */
+function splitBySentenceEnd(text, options = {}) {
+    const { mergeThreshold = 8 } = options
+    const cqStore = []
+    const shielded = shieldCqCodes(text, cqStore)
+    const ranges = getProtectedRanges(shielded)
+    const rangeCount = ranges.length
+
+    const pieces = []
+    let start = 0
+    let rangeIndex = 0
+    for (let i = 0; i < shielded.length; i++) {
+        while (rangeIndex < rangeCount && ranges[rangeIndex].end <= i) rangeIndex += 1
+        const inRange = rangeIndex < rangeCount && i >= ranges[rangeIndex].start && i < ranges[rangeIndex].end
+        if (inRange) continue
+
+        // emoji 代理对：切点不能落在代理对中间
+        const code = shielded.charCodeAt(i)
+        if (code >= 0xd800 && code <= 0xdbff && i + 1 < shielded.length) {
+            i += 1
+            continue
+        }
+
+        if (SENTENCE_END_CHARS.has(shielded[i])) {
+            // 连续句末标点（如「？！？」「……」）归同一段尾
+            let end = i + 1
+            while (end < shielded.length && SENTENCE_END_CHARS.has(shielded[end])) end += 1
+            pieces.push(shielded.slice(start, end))
+            start = end
+            i = end - 1
+            continue
+        }
+
+        if (shielded[i] === '\n') {
+            // 连续空行视为段落边界
+            const isParagraphGap = shielded[i + 1] === '\n' || (i > 0 && shielded[i - 1] === '\n')
+            if (isParagraphGap) {
+                pieces.push(shielded.slice(start, i + 1))
+                start = i + 1
+            }
+        }
+    }
+    if (start < shielded.length) pieces.push(shielded.slice(start))
+
+    const merged = []
+    for (const piece of pieces.map(s => s.trim()).filter(Boolean)) {
+        if (merged.length === 0) {
+            merged.push(piece)
+        } else if (piece.length <= mergeThreshold) {
+            merged[merged.length - 1] += piece
+        } else {
+            merged.push(piece)
+        }
+    }
+    return merged.map(s => restoreCqCodes(s, cqStore))
+}
+
+/**
+ * 按句拆分的入口。
+ *
+ * - 默认（force=false）：沿用 `splitMessage` 的语义分段，短于 maxChunk 时整体直发；
+ * - force=true：「全部按句输出」使用，无视长度阈值按句末标点切分；
+ *   单句仍可能超出平台长度上限，此时再交给 `splitMessage` 做二次切分。
  * @param {string} text - 待拆分文本
- * @param {Object} options - 分段选项（同 splitMessage）
+ * @param {Object} options - 分段选项
+ * @param {boolean} [options.force=false] - 是否无视长度阈值强制按句切分
+ * @param {number} [options.mergeThreshold] - 短片段合并阈值；默认分段为 8，强制按句为 0（不合并句子）
+ * @param {number} [options.chunkSize=36] - 二次切分的目标片长
+ * @param {number} [options.maxChunk=90] - 二次切分的片长硬上限
  * @returns {string[]} 句子数组
  */
 export function splitIntoSentences(text, options = {}) {
-    return splitMessage(text, { chunkSize: 36, maxChunk: 90, mergeThreshold: 8, utteranceLimit: 3500, ...options })
+    const { force = false, mergeThreshold, chunkSize = 36, maxChunk = 90, ...rest } = options
+    if (!force) {
+        return splitMessage(text, {
+            chunkSize,
+            maxChunk,
+            mergeThreshold: mergeThreshold ?? 8,
+            utteranceLimit: 3500,
+            ...rest
+        })
+    }
+    if (typeof text !== 'string' || !text.trim()) return []
+    /*
+     * 强制按句时不合并短句：句末标点本身就是完整语义边界，
+     * 合并会让「好。可以。」这类短句重新粘成一条，违背「全部按句输出」。
+     */
+    const effectiveMergeThreshold = mergeThreshold ?? 0
+    return splitBySentenceEnd(text.trim(), { mergeThreshold: effectiveMergeThreshold }).flatMap(piece =>
+        piece.length > maxChunk
+            ? splitMessage(piece, { chunkSize, maxChunk, mergeThreshold: effectiveMergeThreshold })
+            : [piece]
+    )
 }
 
 /**
@@ -349,6 +451,27 @@ export function calculateDelay(text, options = {}) {
     const lengthComponent = Math.min((typeof text === 'string' ? text.length : 0) * charDelay, 1500)
     const jitter = baseDelay * (0.5 + Math.random())
     return Math.min(baseDelay + lengthComponent + jitter, maxDelay)
+}
+
+/**
+ * 计算「按句输出」的句间延迟。
+ *
+ * 配置来自面板 output.sentenceOutput：
+ * - `randomDelay !== false`：在 [minDelay, maxDelay] 之间随机；
+ * - `randomDelay === false`：固定取 minDelay（面板明确的最小间隔）。
+ * @param {Object} [options] - 延迟选项
+ * @param {number} [options.minDelay=300] - 最小延迟（毫秒）
+ * @param {number} [options.maxDelay=1500] - 最大延迟（毫秒）
+ * @param {boolean} [options.randomDelay=true] - 是否在区间内随机
+ * @returns {number} 延迟毫秒数
+ */
+export function calculateSentenceDelay(options = {}) {
+    const rawMin = Number(options?.minDelay)
+    const rawMax = Number(options?.maxDelay)
+    const minDelay = Number.isFinite(rawMin) ? Math.max(0, rawMin) : 300
+    const maxDelay = Number.isFinite(rawMax) ? Math.max(minDelay, rawMax) : Math.max(minDelay, 1500)
+    if (options?.randomDelay === false) return minDelay
+    return minDelay + Math.random() * (maxDelay - minDelay)
 }
 
 /**
@@ -380,6 +503,12 @@ export function stripListNumbering(segments) {
  * @param {Function} [options.foldHandler] - 折叠回调，签名 (text) => Promise<boolean>
  * @param {number} [options.chunkSize=60] - 分段目标片长
  * @param {number} [options.maxChunk=140] - 分段硬上限
+ * @param {boolean} [options.sentenceMode=false] - 按句输出：无视 shortLimit，按句末标点切分
+ * @param {Object} [options.sentenceDelays] - 按句输出的句间延迟配置
+ * @param {number} [options.sentenceDelays.minDelay=300] - 最小延迟（毫秒）
+ * @param {number} [options.sentenceDelays.maxDelay=1500] - 最大延迟（毫秒）
+ * @param {boolean} [options.sentenceDelays.randomDelay=true] - 是否在区间内随机
+ * @param {boolean} [options.sentencePriorityOverFold=false] - 按句输出时是否跳过折叠
  * @param {Function} [options.onSegmentSent] - 每段发送后的回调 (index, total, messageId)
  * @param {Object} [options.replyOptions] - 透传给 e.reply 的第三参数
  * @returns {Promise<{messageIds: string[], lastMessageId: string|null, folded: boolean}>} 发送结果
@@ -392,6 +521,9 @@ export async function sendSegmentedMessage(e, text, options = {}) {
         foldHandler,
         chunkSize = 60,
         maxChunk = 140,
+        sentenceMode = false,
+        sentenceDelays,
+        sentencePriorityOverFold = false,
         onSegmentSent,
         replyOptions
     } = options
@@ -401,8 +533,8 @@ export async function sendSegmentedMessage(e, text, options = {}) {
     if (typeof text !== 'string' || !text.trim()) return emptyResult
     const trimmed = text.trim()
 
-    // 短回复：单条直发，不做任何切割
-    if (trimmed.length <= shortLimit) {
+    // 短回复：单条直发，不做任何切割。按句输出时跳过该分支，短回复也要逐句发送。
+    if (!sentenceMode && trimmed.length <= shortLimit) {
         const result = await e.reply(trimmed, quote, replyOptions)
         const messageId = result?.message_id
         return {
@@ -412,8 +544,8 @@ export async function sendSegmentedMessage(e, text, options = {}) {
         }
     }
 
-    // 超长回复：先尝试折叠（合并转发），失败回退逐条
-    if (trimmed.length > foldLimit && typeof foldHandler === 'function') {
+    // 超长回复：先尝试折叠（合并转发），失败回退逐条。按句优先时跳过折叠。
+    if (!sentencePriorityOverFold && trimmed.length > foldLimit && typeof foldHandler === 'function') {
         try {
             const folded = await foldHandler(trimmed)
             if (folded) {
@@ -424,7 +556,9 @@ export async function sendSegmentedMessage(e, text, options = {}) {
         }
     }
 
-    const segments = splitMessage(trimmed, { chunkSize, maxChunk })
+    const segments = sentenceMode
+        ? splitIntoSentences(trimmed, { force: true })
+        : splitMessage(trimmed, { chunkSize, maxChunk })
     if (segments.length === 1) {
         const result = await e.reply(segments[0], quote, replyOptions)
         const messageId = result?.message_id
@@ -449,7 +583,9 @@ export async function sendSegmentedMessage(e, text, options = {}) {
             onSegmentSent(i, polishedSegments.length, messageId)
         }
         if (i < polishedSegments.length - 1) {
-            const delay = calculateDelay(polishedSegments[i])
+            const delay = sentenceMode
+                ? calculateSentenceDelay(sentenceDelays || {})
+                : calculateDelay(polishedSegments[i])
             await new Promise(r => setTimeout(r, delay))
         }
     }
@@ -460,6 +596,7 @@ export default {
     splitMessage,
     splitIntoSentences,
     calculateDelay,
+    calculateSentenceDelay,
     stripListNumbering,
     sendSegmentedMessage
 }

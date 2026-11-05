@@ -5,7 +5,7 @@ import config from '../../../config/config.js'
 import { StandardBotApi, StandardMessage as segment } from '../../core/platform/index.js'
 import { chatLogger as logger } from '../../core/utils/logger.js'
 import { pluginRoot } from '../../utils/common.js'
-import { fetchWithLimit } from './helpers.js'
+import { fetchWithLimit, collectEventImageUrls, decodeInlineImageRef } from './helpers.js'
 
 /** 外部媒体下载超时（毫秒），覆盖图片与视频下载 */
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 60000
@@ -685,36 +685,58 @@ export const bltoolsTools = [
                 },
                 image_url: {
                     type: 'string',
-                    description: '要编辑的图片URL'
+                    description: '要编辑的图片URL；不填则使用当前消息或引用消息中的图片'
                 }
             },
-            required: ['prompt', 'image_url']
+            required: ['prompt']
         },
         handler: async (args, ctx) => {
-            const { prompt, image_url } = args
+            const { prompt } = args
             const e = ctx?.getEvent?.()
             if (!e) return { error: '无法获取事件上下文' }
 
             try {
+                let imageRef = typeof args.image_url === 'string' ? args.image_url.trim() : ''
+                if (!imageRef) {
+                    const [firstImage] = await collectEventImageUrls(e, StandardBotApi.fromContext(ctx))
+                    imageRef = firstImage || ''
+                }
+                if (!imageRef) {
+                    return { error: '请提供 image_url，或先发送/引用一张图片' }
+                }
+
+                /*
+                 * data:/base64:// 是内联图片，本地解码即可，不联网；
+                 * 其余引用只放行 http/https。本地路径与未知协议一律拒绝，
+                 * 避免模型借 image_url 把任意本地文件内容当作图片外发给上游模型。
+                 */
+                let dataUrl
+                const inline = decodeInlineImageRef(imageRef, IMAGE_DOWNLOAD_MAX_BYTES)
+                if (inline) {
+                    dataUrl = inline.dataUrl
+                } else if (/^https?:\/\//i.test(imageRef)) {
+                    // 下载图片并转base64
+                    // image_url 由模型给出，且下载内容会转 base64 随请求外发，必须限制耗时与体积
+                    const { response: imageRes, buffer: imageBuffer } = await fetchWithLimit(
+                        imageRef,
+                        {},
+                        {
+                            timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS,
+                            maxBytes: IMAGE_DOWNLOAD_MAX_BYTES,
+                            label: 'ai_image_edit 图片下载'
+                        }
+                    )
+                    const base64 = imageBuffer.toString('base64')
+                    const mimeType = imageRes.headers.get('content-type') || 'image/png'
+                    dataUrl = `data:${mimeType};base64,${base64}`
+                } else {
+                    return { error: `不支持的图片引用: ${imageRef}，仅支持 http/https、data: 或 base64://` }
+                }
+
                 // 动态导入框架服务
                 const { LlmService } = await import('../../services/llm/LlmService.js')
                 const { channelManager } = await import('../../services/llm/ChannelManager.js')
                 const config = (await import('../../../config/config.js')).default
-
-                // 下载图片并转base64
-                // image_url 由模型给出，且下载内容会转 base64 随请求外发，必须限制耗时与体积
-                const { response: imageRes, buffer: imageBuffer } = await fetchWithLimit(
-                    image_url,
-                    {},
-                    {
-                        timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS,
-                        maxBytes: IMAGE_DOWNLOAD_MAX_BYTES,
-                        label: 'ai_image_edit 图片下载'
-                    }
-                )
-                const base64 = imageBuffer.toString('base64')
-                const mimeType = imageRes.headers.get('content-type') || 'image/png'
-                const dataUrl = `data:${mimeType};base64,${base64}`
 
                 // 获取图片模型配置
                 await channelManager.init()

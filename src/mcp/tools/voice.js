@@ -918,7 +918,11 @@ export const voiceTools = [
                     return { success: false, error: '当前消息不包含语音' }
                 }
 
-                const msg = await api.getMessage(args.message_id, { groupId: e?.group_id, userId: e?.user_id })
+                const msg = await api.getMessage(
+                    args.message_id,
+                    /* 群聊事件同时带 group_id 与 user_id，StandardBotApi 不允许两者并存，只取群目标 */
+                    e?.group_id ? { groupId: e.group_id } : { userId: e?.user_id }
+                )
                 const message = msg?.data?.message || msg?.message || []
 
                 for (const seg of message) {
@@ -1018,7 +1022,11 @@ export const voiceTools = [
 
                 // 获取语音文件ID
                 if (args.message_id) {
-                    const msg = await api.getMessage(args.message_id, { groupId: e?.group_id, userId: e?.user_id })
+                    const msg = await api.getMessage(
+                        args.message_id,
+                        /* 群聊事件同时带 group_id 与 user_id，StandardBotApi 不允许两者并存，只取群目标 */
+                        e?.group_id ? { groupId: e.group_id } : { userId: e?.user_id }
+                    )
                     const message = msg?.data?.message || msg?.message || []
                     for (const seg of message) {
                         if (seg.type === 'record') {

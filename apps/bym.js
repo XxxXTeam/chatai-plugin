@@ -597,13 +597,22 @@ ${contextText}
 
                 // 统一拟人发送：短回复单条；中等长度按语义分段逐条；超长折叠为卡片
                 if (!handled) {
-                    const enableSegmented = sentenceOutputCfg.enabled
+                    const enableSegmented = sentenceOutputCfg.enabled === true
+                    // 「全部按句输出」时按句优先于折叠；否则伪人模式仍保留超长折叠
+                    const sentencePriorityOverFold = enableSegmented && sentenceOutputCfg.allSentences === true
                     const foldLimit = Math.max(longTextCfg.threshold || 500, 500)
                     if (enableSegmented || replyText.length > 140) {
                         const result = await sendSegmentedMessage(this, replyText, {
                             quote: false,
                             shortLimit: 140,
                             foldLimit,
+                            sentenceMode: enableSegmented,
+                            sentenceDelays: {
+                                minDelay: sentenceOutputCfg.minDelay,
+                                maxDelay: sentenceOutputCfg.maxDelay,
+                                randomDelay: sentenceOutputCfg.randomDelay
+                            },
+                            sentencePriorityOverFold,
                             foldHandler: async fullText => {
                                 if (longTextCfg.enabled === false) return false
                                 const mode = longTextCfg.mode || 'forward'

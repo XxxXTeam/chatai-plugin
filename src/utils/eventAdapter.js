@@ -408,7 +408,11 @@ export async function getOriginalMessage(e, bot = null, messageCache = null) {
             if (parsed.content) return parsed
         }
         const api = new StandardBotApi({ event: e, bot: bot || e?.bot || globalThis.Bot })
-        const message = await api.getMessage(messageId, { groupId: e.group_id, userId: e.user_id })
+        const message = await api.getMessage(
+            messageId,
+            /* 群聊事件同时带 group_id 与 user_id，StandardBotApi 不允许两者并存，只取群目标 */
+            e.group_id ? { groupId: e.group_id } : { userId: e.user_id }
+        )
         const parsed = parseMessageContent(message?.message || message?.raw_message)
         if (parsed.content) return parsed
     } catch (error) {

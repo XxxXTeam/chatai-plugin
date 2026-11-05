@@ -701,18 +701,31 @@ export class Chat extends plugin {
                         const sentenceOutputCfg = config.get('output.sentenceOutput') || {}
                         // 单条可直发的文本长度上限：超过即进入语义分段/折叠流程
                         const DIRECT_SEND_LIMIT = 140
-                        const useSegmentedOutput = sentenceOutputCfg.enabled && sentenceOutputCfg.chatEnabled !== false
+                        /*
+                         * 普通聊天仅在「全部按句输出」开启时逐句发送。
+                         * 只开启「按句输出」时按配置语义仅作用于伪人模式（apps/bym.js）。
+                         */
+                        const useSentenceOutput =
+                            sentenceOutputCfg.enabled === true && sentenceOutputCfg.allSentences === true
                         // 超长折叠阈值：超过则将整段回复折叠为合并转发/图片卡片
                         const foldLimit = Math.max(longTextCfg.threshold || 500, 500)
                         // 短回复临界值：可逐句发送的最大长度
                         const shortLimit = Math.max(DIRECT_SEND_LIMIT, foldLimit)
 
-                        // 优先走统一分段发送（启用按句输出时对所有文本生效，否则仅长文本前置）
-                        if (!toolWrapperNoise && (useSegmentedOutput || replyTextContent.length > DIRECT_SEND_LIMIT)) {
+                        // 优先走统一分段发送（按句输出时对所有长度生效，否则仅长文本前置）
+                        if (!toolWrapperNoise && (useSentenceOutput || replyTextContent.length > DIRECT_SEND_LIMIT)) {
                             const sent = await sendSegmentedMessage(this, replyTextContent, {
                                 quote: quoteReply,
                                 shortLimit,
                                 foldLimit,
+                                sentenceMode: useSentenceOutput,
+                                sentenceDelays: {
+                                    minDelay: sentenceOutputCfg.minDelay,
+                                    maxDelay: sentenceOutputCfg.maxDelay,
+                                    randomDelay: sentenceOutputCfg.randomDelay
+                                },
+                                // 「全部按句输出」优先于长文本折叠，不再改走合并转发/图片卡片
+                                sentencePriorityOverFold: useSentenceOutput,
                                 foldHandler: async fullText => {
                                     if (longTextCfg.enabled === false) return false
                                     const mode = longTextCfg.mode || 'forward'

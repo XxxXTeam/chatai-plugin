@@ -31,6 +31,23 @@ function clampDeepParseDepth(value, fallback = 5) {
     return Number.isFinite(depth) ? Math.min(Math.max(depth, 1), MAX_DEEP_PARSE_DEPTH) : fallback
 }
 
+/**
+ * 构造 getMessage 的目标参数。
+ * StandardBotApi 在 groupId 与 userId 同时有值时直接抛错，而群聊事件本身同时带有
+ * group_id 与 user_id，故这里按「显式群 → 显式用户 → 事件群 → 事件用户」只取一个。
+ * @param {Object} args - 工具参数
+ * @param {Object|null} event - 当前事件
+ * @param {StandardBotApi} api - 标准接口
+ * @returns {{groupId?: *, userId?: *}} 仅含单一目标的对象；无目标时为空对象
+ */
+function buildMessageTarget(args, event, api) {
+    if (args?.group_id) return { groupId: api.targetId(args.group_id) }
+    if (args?.user_id) return { userId: api.targetId(args.user_id) }
+    if (event?.group_id) return { groupId: event.group_id }
+    if (event?.user_id) return { userId: event.user_id }
+    return {}
+}
+
 function parseProtocolBody(data, encoding = 'auto') {
     if (Buffer.isBuffer(data)) return data
     if (data && typeof data === 'object') return data
@@ -868,10 +885,7 @@ export const messageTools = [
                 let targetId = null
 
                 if (args.message_id) {
-                    const msg = await api.getMessage(args.message_id, {
-                        groupId: args.group_id || e?.group_id,
-                        userId: args.user_id || e?.user_id
-                    })
+                    const msg = await api.getMessage(args.message_id, buildMessageTarget(args, e, api))
                     history = msg ? [msg.data || msg] : []
                 } else if (args.group_id || e?.group_id) {
                     targetId = api.targetId(args.group_id || e.group_id)
@@ -1787,7 +1801,7 @@ export const messageTools = [
                 let source = 'standard.getMessage'
 
                 if (messageId) {
-                    msg = await api.getMessage(messageId, { groupId, userId })
+                    msg = await api.getMessage(messageId, buildMessageTarget(args, e, api))
                 } else if (groupId) {
                     const sequence = api.historySequence(seq ?? e?.seq ?? e?.message_seq ?? e?.message_id, 0)
                     const history = await api.getHistory({ groupId, sequence, count })
@@ -2937,10 +2951,7 @@ export const forwardDataTools = [
                 let source = 'unknown'
 
                 if (args.message_id) {
-                    msgData = await api.getMessage(args.message_id, {
-                        groupId: e?.group_id,
-                        userId: e?.user_id
-                    })
+                    msgData = await api.getMessage(args.message_id, buildMessageTarget(args, e, api))
                     source = 'standard.getMessage'
                 } else if (e) {
                     // 从当前事件提取

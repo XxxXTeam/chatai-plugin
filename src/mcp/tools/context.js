@@ -186,7 +186,11 @@ export const contextTools = [
                 const getMessage = async (messageId, seq, { allowEventReply = false } = {}) => {
                     if (messageId) {
                         try {
-                            const message = await api.getMessage(messageId, { groupId: e.group_id, userId: e.user_id })
+                            const message = await api.getMessage(
+                                messageId,
+                                /* 群聊事件同时带 group_id 与 user_id，StandardBotApi 不允许两者并存，只取群目标 */
+                                e.group_id ? { groupId: e.group_id } : { userId: e.user_id }
+                            )
                             if (message) return message
                         } catch {}
                     }
