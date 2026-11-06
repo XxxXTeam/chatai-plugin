@@ -355,7 +355,7 @@ export class PresetManager {
         const { includeKnowledge = true, conversationId } = options
 
         // 检查是否是已清除的上下文（#结束对话后）
-        if (conversationId && this.isContextCleared(conversationId)) {
+        if (conversationId && this.isContextCleared(conversationId, { consume: false })) {
             // 返回基础提示词，不包含之前的人设和上下文
             return this.getCleanPrompt(id, context)
         }
@@ -476,18 +476,21 @@ export class PresetManager {
         this.clearedContexts.set(conversationId, {
             clearedAt: Date.now(),
             useCount: 0, // 使用计数
-            maxUses: 3 // 最多保护3次请求
+            maxUses: 1 // 只保护清空后的第一条消息，避免后续消息丢失新上下文
         })
         logger.debug(`[PresetManager] 标记上下文已清除: ${conversationId}`)
     }
 
     /**
      * 检查上下文是否已被清除
-     * 改进：使用时间窗口+使用次数双重保护，确保多次请求都能正确截断上下文
+     * 默认会消耗一次使用额度；只读检查（如构建提示词）请传 { consume: false }，
+     * 否则会误伤清空后的下一条消息。
      * @param {string} conversationId
+     * @param {{consume?: boolean}} [options]
      * @returns {boolean}
      */
-    isContextCleared(conversationId) {
+    isContextCleared(conversationId, options = {}) {
+        const { consume = true } = options
         const state = this.clearedContexts.get(conversationId)
         if (!state) return false
 
@@ -501,7 +504,9 @@ export class PresetManager {
             return false
         }
 
-        state.useCount++
+        if (consume) {
+            state.useCount++
+        }
         return true
     }
 

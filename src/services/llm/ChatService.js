@@ -380,7 +380,10 @@ export class ChatService {
         await presetManager.init()
 
         // 检查是否是结束对话后的新会话，如果是则清空历史（防止旧上下文传递）
-        if (presetManager.isContextCleared(conversationId)) {
+        // 只在这里消费一次清除标记：后续 isNewSession 复用该布尔值，避免同一条消息二次消耗额度，
+        // 导致清空后的第二条消息也被误判为新会话而丢失上下文。
+        const contextCleared = presetManager.isContextCleared(conversationId)
+        if (contextCleared) {
             history = []
             logger.debug(`[ChatService] 检测到结束对话标记，清空历史上下文: ${conversationId}`)
         }
@@ -552,7 +555,8 @@ export class ChatService {
         }
         // 使用已解析的预设ID（包含作用域配置）
         const effectivePresetId = effectivePresetIdForModel
-        const isNewSession = presetManager.isContextCleared(conversationId)
+        // 复用前面已消费的清除标记结果，不能再次调用 isContextCleared（会多消耗一次额度）
+        const isNewSession = contextCleared
 
         // 渠道高级配置
         const channelAdvanced = channel?.advanced || {}
