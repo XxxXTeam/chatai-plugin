@@ -768,7 +768,10 @@ export class Chat extends plugin {
                                     }
                                     return false
                                 },
-                                onSegmentSent(index, total, messageId) {
+                                // 必须用箭头函数保留 Chat 实例的 this：
+                                // sendSegmentedMessage 以裸函数形式调用 onSegmentSent，
+                                // 方法简写会拿到 undefined，首段发送后抛错并中止后续分段。
+                                onSegmentSent: (index, total, messageId) => {
                                     if (index === 0 && messageId) {
                                         this.handleAutoRecall({ message_id: messageId }, false)
                                     }
