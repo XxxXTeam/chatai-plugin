@@ -26,6 +26,7 @@ import {
     sendSegmentedMessage
 } from '../src/utils/messageSegment.js'
 import { setToolContext } from '../src/core/utils/toolAdapter.js'
+import { resolveQuoteReply } from '../src/utils/replySettings.js'
 import { conversationTracker } from '../src/services/llm/ConversationTracker.js'
 import { contextManager } from '../src/services/llm/ContextManager.js'
 import { toolApprovalService } from '../src/services/tools/ToolApprovalService.js'
@@ -669,7 +670,7 @@ export class Chat extends plugin {
                         }
                     }
 
-                    const quoteReply = config.get('basic.quoteReply') === true
+                    const quoteReply = resolveQuoteReply(e)
                     const longTextCfg = config.get('output.longText') || {}
                     const mathRenderEnabled = config.get('render.mathFormula') !== false
 
