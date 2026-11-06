@@ -135,7 +135,9 @@ class Config {
                 debug: false,
                 showThinkingMessage: true, // 是否发送"思考中..."提示
                 debugToConsoleOnly: true, // 调试信息仅输出到控制台
-                quoteReply: true, // 是否引用触发消息
+                quoteReply: true, // 兼容旧配置：未单独设置群聊/私聊时的默认值
+                quoteReplyGroup: true, // 群聊是否引用触发消息
+                quoteReplyPrivate: true, // 私聊是否引用触发消息
                 autoRecall: {
                     enabled: false, // 是否启用自动撤回
                     delay: 60, // 撤回延迟（秒）
