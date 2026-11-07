@@ -5,6 +5,7 @@
 import { chatLogger } from '../../core/utils/logger.js'
 import { resolveClientTemperature } from '../llm/TemperatureResolver.js'
 import { delegateRequest } from '../llm/LlmDelegator.js'
+import { memoryLlmScheduler } from './MemoryLlmScheduler.js'
 
 const logger = chatLogger
 
@@ -83,10 +84,12 @@ export async function extractMemoryLLMText(response) {
  * @param {number} [options.temperature=0.3] - 温度参数
  * @param {string} [options.caller='MemoryLLM'] - 调用者标识（用于日志）
  * @param {string} [options.groupId] - 群组 ID（用于群独立渠道选择）
+ * @param {string} [options.scopeKey] - 并发闸门兼容键（默认取 caller，不参与冷却）
+ * @param {number} [options.timeoutMs] - 单请求超时（默认 memory.llmTimeoutMs）
  * @returns {Promise<string>} LLM 响应文本
  */
 export async function callMemoryLLM(llmClient, prompt, options = {}) {
-    const { maxTokens = 1000, temperature = 0.3, caller = 'MemoryLLM' } = options
+    const { maxTokens = 1000, temperature = 0.3, caller = 'MemoryLLM', scopeKey = null, timeoutMs = null } = options
 
     if (!llmClient) {
         throw new Error('LLM client not configured')
@@ -102,22 +105,28 @@ export async function callMemoryLLM(llmClient, prompt, options = {}) {
     const tempOpts = resolvedTemp !== undefined ? { temperature: resolvedTemp } : {}
 
     const model = llmClient._channelInfo?.model || options.model || ''
-    const delegated = await delegateRequest({
-        userMessage: { role: 'user', content: [{ type: 'text', text: prompt }] },
-        initialModel: model,
-        initialChannel: llmClient._channelInfo?.channel || null,
-        initialClient: llmClient,
-        clientBaseOptions: {},
-        requestOptions: {
-            ...(model ? { model } : {}),
-            maxToken: maxTokens,
-            ...tempOpts
+    /* 并发闸门内执行 delegateRequest：复用调用方 client，但调度器负责限流 */
+    return memoryLlmScheduler.run(
+        async () => {
+            const delegated = await delegateRequest({
+                userMessage: { role: 'user', content: [{ type: 'text', text: prompt }] },
+                initialModel: model,
+                initialChannel: llmClient._channelInfo?.channel || null,
+                initialClient: llmClient,
+                clientBaseOptions: {},
+                requestOptions: {
+                    ...(model ? { model } : {}),
+                    maxToken: maxTokens,
+                    ...tempOpts
+                },
+                event: null,
+                source: caller
+            })
+            logger.debug(`[${caller}] LlmDelegator 调用完成: model=${model}`)
+            return extractMemoryLLMText(delegated.response)
         },
-        event: null,
-        source: caller
-    })
-    logger.debug(`[${caller}] LlmDelegator 调用完成: model=${model}`)
-    return extractMemoryLLMText(delegated.response)
+        { caller, scopeKey, timeoutMs }
+    )
 }
 
 /**

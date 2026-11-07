@@ -13,6 +13,7 @@ import { delegateRequest } from '../llm/LlmDelegator.js'
 import { statsService } from '../stats/StatsService.js'
 import { resolveClientTemperature } from '../llm/TemperatureResolver.js'
 import { formatUserMemoryBlock } from '../memory/MemoryService.js'
+import { memoryLlmScheduler } from '../memory/MemoryLlmScheduler.js'
 
 /** 时间戳 Map 的条目上限 */
 const TIME_MAP_MAX_SIZE = 5000
@@ -98,6 +99,8 @@ export class MemoryManager {
     constructor() {
         this.initialized = false
         this.pollInterval = null
+        /** @type {boolean} 轮询重入守卫：上一轮未结束时跳过本轮 */
+        this._pollRunning = false
         this.lastPollTime = new Map() // userId -> timestamp
         this.lastSummarizeTime = new Map() // groupId/userId -> timestamp 记录上次总结时间
     }
@@ -165,7 +168,11 @@ export class MemoryManager {
     startPolling() {
         if (!config.get('memory.enabled')) return
 
-        const intervalMinutes = config.get('memory.pollInterval') || 5
+        // 定时器间隔不小于 minPollInterval：config.yaml 可能残留较旧的 pollInterval（如 5 分钟），
+        // 逐目标频率由 minPollInterval 把守，定时器没必要更密集，只会空转并放大触发频率。
+        const configuredIntervalMinutes = config.get('memory.pollInterval') || 5
+        const minPollIntervalMinutes = config.get('memory.minPollInterval') || 180
+        const intervalMinutes = Math.max(configuredIntervalMinutes, minPollIntervalMinutes)
         const intervalMs = intervalMinutes * 60 * 1000
 
         // 清除旧的定时器
@@ -340,7 +347,8 @@ export class MemoryManager {
                     disableHistorySave: true,
                     ...(_temp !== undefined ? { temperature: _temp } : {})
                 },
-                'MemoryGroupContext'
+                'MemoryGroupContext',
+                `group:${groupId}`
             )
 
             const responseText = result.contents?.[0]?.text?.trim() || ''
@@ -604,12 +612,22 @@ export class MemoryManager {
     async pollAndSummarize() {
         if (!config.get('memory.enabled')) return
 
+        // 重入保护：上一轮尚未结束时不启动新一轮。轮询路径是记忆 LLM 请求的最大来源之一，
+        // 单轮最多处理批上限个目标 × 每目标最多一次 LLM，慢渠道（含多次重试）很容易让单轮
+        // 耗时超过 pollInterval，无守卫会导致多个轮次并行叠加。
+        if (this._pollRunning) {
+            logger.debug('[MemoryManager] 上一轮轮询尚未结束，跳过本轮')
+            return
+        }
+        this._pollRunning = true
         try {
             // 获取最近有对话的用户
             const conversations = databaseService.getConversations()
             // 私聊按用户去重；共享群必须按「群 + 持久化发送者」去重，不能把群 ID 当用户 ID。
             const processedUsers = new Set()
-            const minPollInterval = (config.get('memory.minPollInterval') || 30) * 60 * 1000 // 默认30分钟
+            const minPollInterval = (config.get('memory.minPollInterval') || 180) * 60 * 1000 // 默认180分钟
+            const pollBatchSize =
+                (config.get('memory.pollBatchSize') || 20) <= 0 ? 20 : config.get('memory.pollBatchSize')
             const now = Date.now()
 
             for (const conv of conversations) {
@@ -671,11 +689,11 @@ export class MemoryManager {
                     }
 
                     // 避免一次处理太多用户
-                    if (processedUsers.size >= 100) break
+                    if (processedUsers.size >= pollBatchSize) break
                 }
 
-                // 避免一次处理太多用户，限制单次轮询最多处理10个用户
-                if (processedUsers.size >= 100) {
+                // 单次轮询的目标数上限，避免一次打满渠道
+                if (processedUsers.size >= pollBatchSize) {
                     logger.debug(`[MemoryManager] 单次轮询处理了 ${processedUsers.size} 个用户，等待下次轮询`)
                     break
                 }
@@ -686,6 +704,8 @@ export class MemoryManager {
             }
         } catch (error) {
             logger.warn('[MemoryManager] 轮询处理失败:', error.message)
+        } finally {
+            this._pollRunning = false
         }
     }
 
@@ -815,7 +835,8 @@ ${dialogText}
                     disableHistorySave: true,
                     ...(_temp2 !== undefined ? { temperature: _temp2 } : {})
                 },
-                'MemoryAnalyzeUser'
+                'MemoryAnalyzeUser',
+                memoryUserId
             )
 
             const responseText = result.contents?.[0]?.text?.trim() || ''
@@ -1058,7 +1079,8 @@ ${existingMemoryList || '暂无'}
                     disableHistorySave: true,
                     ...(_temp3 !== undefined ? { temperature: _temp3 } : {})
                 },
-                'MemoryAutoExtract'
+                'MemoryAutoExtract',
+                this.getScopedMemoryUserId(userId, options?.groupId)
             )
 
             const responseText = result.contents?.[0]?.text?.trim()
@@ -1124,23 +1146,38 @@ ${existingMemoryList || '暂无'}
      * @param {string} caller - 调用者标签
      * @returns {Promise<Object>} 客户端响应
      */
-    async _sendMemoryLlm(client, message, requestOptions, caller) {
+    /**
+     * 通过委托器发送记忆 LLM 请求。
+     * 统一经记忆模块并发闸门，避免轮询/手动入口同时占满渠道。
+     *
+     * @param {Object} client - LlmService.getChatClient 构造的内部客户端
+     * @param {Object} message - 用户消息
+     * @param {Object} requestOptions - 请求选项
+     * @param {string} [caller] - 调用者标识
+     * @param {string} [scopeKey] - 作用域标识（用于日志与限流归因）
+     * @returns {Promise<Object>} 原始响应
+     */
+    async _sendMemoryLlm(client, message, requestOptions, caller, scopeKey = null) {
         const isInternalClient =
             typeof client?._channelInfo?.id === 'string' &&
             (typeof client?.sendMessage === 'function' || typeof client?.sendMessageWithHistory === 'function')
         if (!isInternalClient) {
             throw new Error('[MemoryManager] 非内部客户端无法委托调度，请使用 getChatClient 构造客户端')
         }
-        const result = await delegateRequest({
-            userMessage: message,
-            initialModel: requestOptions.model || client._channelInfo?.model,
-            initialChannel: client._channelInfo?.channel || null,
-            initialClient: client,
-            clientBaseOptions: {},
-            requestOptions,
-            event: null,
-            source: caller || 'memory'
-        })
+        const result = await memoryLlmScheduler.run(
+            () =>
+                delegateRequest({
+                    userMessage: message,
+                    initialModel: requestOptions.model || client._channelInfo?.model,
+                    initialChannel: client._channelInfo?.channel || null,
+                    initialClient: client,
+                    clientBaseOptions: {},
+                    requestOptions,
+                    event: null,
+                    source: caller || 'memory'
+                }),
+            { caller: caller || 'memory', scopeKey }
+        )
         return result.response
     }
 
@@ -1580,7 +1617,8 @@ ${existingMemoryList || '暂无'}
                     disableHistorySave: true,
                     ...(_temp4 !== undefined ? { temperature: _temp4 } : {})
                 },
-                'MemoryTimeRange'
+                'MemoryTimeRange',
+                `group:${groupId}`
             )
 
             const responseText = result.contents?.[0]?.text?.trim() || ''

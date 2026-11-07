@@ -6,6 +6,7 @@ import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
 import { memoryService } from './MemoryService.js'
 import { callMemoryLLM, formatMemoryTime } from './llmHelper.js'
+import { memoryLlmScheduler } from './MemoryLlmScheduler.js'
 import { MemoryCategory, MemorySource, getCategoryLabel, isValidCategory } from './MemoryTypes.js'
 import { preserveTargetId } from '../../core/platform/StandardBotIdentity.js'
 
@@ -688,6 +689,38 @@ class MemorySummarizer {
             summarized: false,
             cleanedCount: 0,
             graphExtracted: false
+        }
+
+        /*
+         * 频率闸门。
+         *
+         * ChatAgent 每条回复都会调用本方法，图谱提取（2 次 LLM）与记忆总结（每分类 1 次）
+         * 不应按回复频率执行。仅在需要 summary 时按作用域做冷却 + 新消息水位判定：
+         * - 冷却未到：直接跳过，不发任何 LLM；
+         * - 新消息不足：同样跳过，等后续回复累计。
+         * 判定与 markProcessed 都在首个 await 之前同步完成，避免并发回复同时通过。
+         */
+        if (summarize) {
+            const scopeKey =
+                groupId === null || groupId === undefined || groupId === ''
+                    ? `user:${userId}`
+                    : `group:${groupId}:user:${userId}`
+            memoryLlmScheduler.noteMessage(scopeKey)
+            const gate = memoryLlmScheduler.checkGate(scopeKey)
+            if (!gate.allowed) {
+                logger.debug(
+                    `[MemorySummarizer] 跳过对话结束总结(${gate.reason}): scope=${scopeKey}, ` +
+                        `待处理消息=${gate.messageCount}/${gate.minMessages}`
+                )
+                return {
+                    ...result,
+                    skipped: true,
+                    reason: gate.reason,
+                    retryAfterSeconds: gate.retryAfterSeconds,
+                    messageCount: gate.messageCount
+                }
+            }
+            memoryLlmScheduler.markProcessed(scopeKey)
         }
 
         try {

@@ -734,7 +734,14 @@ export class ChatAgent {
                     ...(topicText ? { recentTopics: [topicText] } : {})
                 })
             }
-            await this._triggerMemoryExtraction(cleanUserId, message, textContent, groupId, validHistory)
+            /*
+             * 记忆提取改为后台执行：图谱/总结链路最多会发起十余次 LLM 请求，
+             * 同步 await 会让回复被记忆任务拖慢。频率由 MemoryLlmScheduler 的
+             * 冷却与消息水位控制，这里只负责把任务抛到后台。
+             */
+            void this._triggerMemoryExtraction(cleanUserId, message, textContent, groupId, validHistory).catch(err =>
+                logger.debug('[ChatAgent] 后台记忆提取失败:', err.message)
+            )
         }
 
         // 收集调试信息

@@ -5,6 +5,7 @@
 import config from '../config/config.js'
 import { chatService } from '../src/services/llm/ChatService.js'
 import { memoryManager } from '../src/services/storage/MemoryManager.js'
+import { memoryLlmScheduler } from '../src/services/memory/MemoryLlmScheduler.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
 import { renderService } from '../src/services/media/RenderService.js'
 import { channelManager } from '../src/services/llm/ChannelManager.js'
@@ -301,6 +302,21 @@ export class AICommands extends plugin {
             const userId = e.user_id || e.sender?.user_id || 'unknown'
             const groupId = e.group_id || null
 
+            /*
+             * 与自动链路共享同一频率闸门（仅冷却，不要求消息水位）。
+             * 被拦截时提示剩余时间，不发起任何 LLM 请求。
+             */
+            const scopeKey =
+                groupId === null || groupId === undefined || groupId === ''
+                    ? `user:${userId}`
+                    : `group:${groupId}:user:${userId}`
+            const gate = memoryLlmScheduler.checkGate(scopeKey, { requireMessages: false })
+            if (!gate.allowed) {
+                const minutes = Math.max(1, Math.ceil((gate.retryAfterSeconds || 0) / 60))
+                await this.reply(`⏳ 记忆整理冷却中，约 ${minutes} 分钟后可再次整理`, true)
+                return true
+            }
+
             await this.reply('🔄 正在整理记忆...', true)
 
             // 执行覆盖式总结
@@ -312,6 +328,8 @@ export class AICommands extends plugin {
                 await this.reply(`❌ 记忆整理失败: ${result.error}`, true)
                 return true
             }
+
+            memoryLlmScheduler.markProcessed(scopeKey)
 
             // 构建反馈
             const feedbackLines = [

@@ -6,6 +6,7 @@ import express from 'express'
 import { ChaiteResponse, getRawDatabase } from './shared.js'
 import { memoryService } from '../memory/MemoryService.js'
 import { memorySummarizer } from '../memory/MemorySummarizer.js'
+import { memoryLlmScheduler } from '../memory/MemoryLlmScheduler.js'
 import { MemoryCategory, CategoryLabels, isValidCategory } from '../memory/MemoryTypes.js'
 
 const router = express.Router()
@@ -171,7 +172,33 @@ router.post('/user/:userId', async (req, res) => {
 router.post('/user/:userId/summarize', async (req, res) => {
     try {
         const { userId } = req.params
-        const { useLLM = true, groupId, model, cleanup = true } = req.body || {}
+        const { useLLM = true, groupId, model, cleanup = true, force = false } = req.body || {}
+
+        /*
+         * per-user 冷却：手动总结与自动链路共享同一频率闸门。
+         * HTTP 入口忽略消息水位（requireMessages=false），仅受冷却约束；
+         * force=true 供脚本跳过冷却（前端不传）。
+         */
+        const scopeKey =
+            groupId === undefined || groupId === null || groupId === ''
+                ? `user:${userId}`
+                : `group:${groupId}:user:${userId}`
+        if (!force) {
+            const gate = memoryLlmScheduler.checkGate(scopeKey, { requireMessages: false })
+            if (!gate.allowed) {
+                const minutes = Math.max(1, Math.ceil((gate.retryAfterSeconds || 0) / 60))
+                res.json(
+                    ChaiteResponse.ok({
+                        success: false,
+                        skipped: true,
+                        reason: gate.reason,
+                        retryAfterSeconds: gate.retryAfterSeconds,
+                        error: `总结冷却中，约 ${minutes} 分钟后可再次总结`
+                    })
+                )
+                return
+            }
+        }
 
         const result = await memorySummarizer.summarizeUserMemories(userId, {
             useLLM,
@@ -179,6 +206,7 @@ router.post('/user/:userId/summarize', async (req, res) => {
             ...(groupId !== undefined ? { groupId } : {}),
             ...(model ? { model } : {})
         })
+        if (result?.success) memoryLlmScheduler.markProcessed(scopeKey)
         res.json(ChaiteResponse.ok(result))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))

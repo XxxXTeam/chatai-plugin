@@ -1,6 +1,6 @@
 import axios from 'axios'
-import { randomUUID } from 'crypto'
 import fs from 'node:fs'
+import config from '../../../config/config.js'
 import { chatLogger as logger } from '../../core/utils/logger.js'
 import { StandardBotApi, StandardMessage, StandardRawApi } from '../../core/platform/index.js'
 
@@ -8,7 +8,35 @@ import { StandardBotApi, StandardMessage, StandardRawApi } from '../../core/plat
  * 语音消息工具
  */
 
-const VITS_API_URL = 'https://mikusfan-vits-uma-genshin-honkai.hf.space/api/generate'
+/** VITS 语音合成服务地址 */
+const VITS_BASE_URL = 'https://vist.openel.top'
+
+/** VITS 服务访问令牌 */
+const VITS_AUTH_TOKEN = 'vits_88e801332d5485b08731a5f0e3c742b11a799d00693a5d4f'
+
+/** 调用 VITS 服务时统一携带的鉴权头 */
+const VITS_AUTH_HEADERS = { Authorization: `Bearer ${VITS_AUTH_TOKEN}` }
+
+/** gradio 6 语音合成端点名 */
+const VITS_API_NAME = 'GetSpeech'
+
+/** 服务端音色/语言枚举的缓存时长（毫秒） */
+const VITS_META_CACHE_TTL = 10 * 60 * 1000
+
+/** 提交合成请求的排队超时（毫秒） */
+const VITS_CALL_TIMEOUT = 30 * 1000
+
+/** 等待合成结果的超时（毫秒） */
+const VITS_RESULT_TIMEOUT = 120 * 1000
+
+/** 下载合成音频的超时（毫秒） */
+const VITS_AUDIO_TIMEOUT = 30 * 1000
+
+/** 合成音频大小上限（字节） */
+const VITS_AUDIO_MAX_BYTES = 32 * 1024 * 1024
+
+/** @type {{at: number, speakers: string[], languages: string[]}} */
+let vitsMetaCache = { at: 0, speakers: [], languages: [] }
 
 /**
  * AI 声聊角色中文名到官方角色 ID 的映射
@@ -64,15 +92,260 @@ function detectLanguage(text = '') {
     if (/[\u3040-\u309F\u30A0-\u30FF]/.test(text)) {
         return '日语'
     }
-    if (/^[a-zA-Z\s,.?!]+$/.test(text)) {
-        return 'English'
-    }
     return '中文'
 }
 
 function safePositiveNumber(value, fallback) {
     const num = Number(value)
     return Number.isFinite(num) && num > 0 ? num : fallback
+}
+
+/**
+ * 读取服务端 `/gradio_api/info` 中声明的音色与语言枚举并缓存。
+ * 角色列表完全以服务端为准，服务端换模型后无需改代码。
+ * @returns {Promise<{at: number, speakers: string[], languages: string[]}>} 音色与语言枚举
+ */
+async function fetchVitsMeta() {
+    const now = Date.now()
+    if (now - vitsMetaCache.at < VITS_META_CACHE_TTL && vitsMetaCache.speakers.length) {
+        return vitsMetaCache
+    }
+
+    const response = await axios.get(`${VITS_BASE_URL}/gradio_api/info`, {
+        timeout: 10000,
+        headers: VITS_AUTH_HEADERS
+    })
+    const endpoint = response.data?.named_endpoints?.[`/${VITS_API_NAME}`]
+    const parameters = Array.isArray(endpoint?.parameters) ? endpoint.parameters : []
+    const speakerParam = parameters.find(item => item?.parameter_name === 'speaker_id')
+    const languageParam = parameters.find(item => item?.parameter_name === 'language')
+    const speakers = Array.isArray(speakerParam?.type?.enum) ? speakerParam.type.enum.map(String) : []
+    const languages = Array.isArray(languageParam?.type?.enum) ? languageParam.type.enum.map(String) : []
+
+    if (!speakers.length) {
+        throw new Error('服务端未返回可用音色列表，请确认 VITS 服务是否正常')
+    }
+
+    vitsMetaCache = { at: now, speakers, languages }
+    return vitsMetaCache
+}
+
+/**
+ * 去掉音色名中的括号别名，例如「甘雨（椰羊）」->「甘雨」。
+ * @param {string} name - 服务端音色名
+ * @returns {string} 主名
+ */
+function stripSpeakerAlias(name) {
+    return String(name)
+        .replace(/（[^）]*）/g, '')
+        .replace(/\([^)]*\)/g, '')
+        .trim()
+}
+
+/**
+ * 计算两个字符串的最长公共子串长度，仅用于生成候选提示。
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function longestCommonSubstringLength(a, b) {
+    const left = String(a).toLowerCase()
+    const right = String(b).toLowerCase()
+    if (!left || !right) return 0
+    let best = 0
+    let prev = new Array(right.length + 1).fill(0)
+    for (let i = 1; i <= left.length; i++) {
+        const cur = new Array(right.length + 1).fill(0)
+        for (let j = 1; j <= right.length; j++) {
+            if (left[i - 1] === right[j - 1]) {
+                cur[j] = prev[j - 1] + 1
+                if (cur[j] > best) best = cur[j]
+            }
+        }
+        prev = cur
+    }
+    return best
+}
+
+/**
+ * 把用户输入的简称解析为服务端枚举中的精确音色名。
+ * 解析顺序：精确匹配 → 主名匹配 → 服务端名包含输入 → 输入包含服务端主名。
+ * 命中多个候选时报错，不做猜测。
+ * @param {string} input - 用户输入的音色名
+ * @param {string[]} speakers - 服务端音色枚举
+ * @returns {string} 服务端接受的音色名
+ */
+function resolveVitsSpeaker(input, speakers) {
+    const raw = String(input ?? '').trim()
+    if (!raw) throw new Error('缺少音色名')
+    const lower = raw.toLowerCase()
+
+    const exact = speakers.find(name => name.toLowerCase() === lower)
+    if (exact) return exact
+
+    const aliasMatches = speakers.filter(name => stripSpeakerAlias(name).toLowerCase() === lower)
+    if (aliasMatches.length === 1) return aliasMatches[0]
+
+    const containsInput = speakers.filter(name => name.toLowerCase().includes(lower))
+    if (containsInput.length === 1) return containsInput[0]
+
+    const containedByInput = speakers.filter(name => {
+        const main = stripSpeakerAlias(name).toLowerCase()
+        return main && lower.includes(main)
+    })
+    if (containedByInput.length === 1) return containedByInput[0]
+
+    const suggestions = [...speakers]
+        .map(name => ({ name, score: longestCommonSubstringLength(raw, name) }))
+        .filter(item => item.score > 0)
+        .sort((a, b) => b.score - a.score || a.name.length - b.name.length)
+        .slice(0, 5)
+        .map(item => item.name)
+    const hint = suggestions.length
+        ? `，你可能想用：${suggestions.join('、')}`
+        : '，请先调用 get_tts_speakers 查看可用音色'
+    throw new Error(`音色「${raw}」不存在${hint}`)
+}
+
+/**
+ * 把调用方语言参数规范化为服务端枚举值。
+ * 服务端只提供「中文 / 日语 / 中日混合」，英文文本由中文 cleaner 处理。
+ * @param {string} input - 调用方传入的语言
+ * @param {string} text - 待合成文本
+ * @param {string[]} languages - 服务端语言枚举
+ * @returns {string} 服务端接受的枚举值
+ */
+function resolveVitsLanguage(input, text, languages) {
+    const choices = Array.isArray(languages) && languages.length ? languages : ['中文', '日语']
+    const raw = String(input ?? '').trim()
+    let keyword = ''
+    if (/^(zh|cn|chinese|中文)/i.test(raw)) keyword = '中文'
+    else if (/^(ja|jp|japanese|日语|日本語)/i.test(raw)) keyword = '日语'
+    else if (/(mix|混合)/i.test(raw)) keyword = '混合'
+    else if (!raw) keyword = detectLanguage(text)
+
+    const chineseChoice = choices.find(item => item.includes('中文') && !item.includes('混合')) || choices[0]
+    if (keyword === '日语') return choices.find(item => item.includes('日语')) || chineseChoice
+    if (keyword === '混合') return choices.find(item => item.includes('混合')) || chineseChoice
+    return chineseChoice
+}
+
+/**
+ * 解析 gradio 的 SSE 响应文本为事件列表。
+ * @param {string} body - SSE 原始文本
+ * @returns {{event: string, data: string}[]} 事件列表
+ */
+function parseGradioSse(body) {
+    const events = []
+    let eventName = 'message'
+    let dataLines = []
+    const flush = () => {
+        if (!dataLines.length) {
+            eventName = 'message'
+            return
+        }
+        events.push({ event: eventName, data: dataLines.join('\n') })
+        eventName = 'message'
+        dataLines = []
+    }
+    for (const line of String(body ?? '').split(/\r?\n/)) {
+        if (line === '') {
+            flush()
+        } else if (line.startsWith('event:')) {
+            eventName = line.slice('event:'.length).trim()
+        } else if (line.startsWith('data:')) {
+            dataLines.push(line.slice('data:'.length).trim())
+        }
+    }
+    flush()
+    return events
+}
+
+/**
+ * 调用 VITS 服务合成语音。
+ * gradio 6 采用「POST 取 event_id → GET SSE 取结果」的两步协议。
+ * @param {Object} options - 合成参数
+ * @param {string} options.text - 文本
+ * @param {string} options.language - 服务端语言枚举值
+ * @param {string} options.speaker - 服务端音色名
+ * @param {number} options.noiseScale - noise_scale
+ * @param {number} options.noiseScaleW - noise_scale_w
+ * @param {number} options.lengthScale - length_scale
+ * @returns {Promise<{message: string, audio: Object|null, extra: string}>} 合成结果
+ */
+async function callVitsSpeech(options) {
+    const { text, language, speaker, noiseScale, noiseScaleW, lengthScale } = options
+    const endpoint = `${VITS_BASE_URL}/gradio_api/call/${VITS_API_NAME}`
+
+    const accepted = await axios.post(
+        endpoint,
+        { data: [text, language, speaker, noiseScale, noiseScaleW, lengthScale] },
+        { timeout: VITS_CALL_TIMEOUT, headers: VITS_AUTH_HEADERS }
+    )
+    const eventId = accepted.data?.event_id
+    if (!eventId) {
+        throw new Error(`服务未返回 event_id: ${JSON.stringify(accepted.data).slice(0, 200)}`)
+    }
+
+    const stream = await axios.get(`${endpoint}/${eventId}`, {
+        timeout: VITS_RESULT_TIMEOUT,
+        responseType: 'text',
+        transformResponse: [value => value],
+        headers: VITS_AUTH_HEADERS
+    })
+    const events = parseGradioSse(stream.data)
+
+    const errorEvent = events.find(item => item.event === 'error')
+    if (errorEvent) {
+        let detail = errorEvent.data
+        try {
+            detail = JSON.parse(errorEvent.data)?.error || detail
+        } catch {
+            // data 非 JSON 时保留原文
+        }
+        throw new Error(String(detail).split('\n')[0])
+    }
+
+    const completeEvent = events.find(item => item.event === 'complete')
+    if (!completeEvent) {
+        throw new Error('服务未返回合成结果（SSE 流缺少 complete 事件）')
+    }
+
+    let payload
+    try {
+        payload = JSON.parse(completeEvent.data)
+    } catch {
+        throw new Error('服务返回的合成结果不是合法 JSON')
+    }
+    if (!Array.isArray(payload)) {
+        throw new Error('服务返回的合成结果格式异常')
+    }
+    return { message: payload[0], audio: payload[1] || null, extra: payload[2] || '' }
+}
+
+/**
+ * 把服务端返回的 FileData 转为可下载的绝对地址。
+ * 服务端返回的 url 基于它自己的 localhost，跨机访问需按固定端点重写。
+ * @param {Object} audio - gradio FileData
+ * @returns {string} 可下载地址
+ */
+function resolveVitsAudioUrl(audio) {
+    if (!audio || typeof audio !== 'object') return ''
+    if (typeof audio.path === 'string' && audio.path) {
+        return `${VITS_BASE_URL}/gradio_api/file=${audio.path}`
+    }
+    if (typeof audio.url === 'string' && audio.url) {
+        try {
+            const target = new URL(audio.url)
+            const base = new URL(VITS_BASE_URL)
+            target.protocol = base.protocol
+            target.host = base.host
+            return target.toString()
+        } catch {
+            return audio.url
+        }
+    }
+    return ''
 }
 
 export const voiceTools = [
@@ -428,140 +701,34 @@ export const voiceTools = [
 
     {
         name: 'get_tts_speakers',
-        description: '【查询】获取VITS语音合成可用的角色/音色列表。常用角色包括原神、崩坏角色等',
+        description: '【查询】获取VITS语音合成服务当前支持的音色与语言列表（实时读取服务端枚举，不在本地硬编码）',
         inputSchema: {
             type: 'object',
             properties: {}
         },
         handler: async () => {
-            // VITS 支持的角色列表（按游戏/来源分类）
-            const speakers = {
-                原神: [
-                    '派蒙',
-                    '凯亚',
-                    '安柏',
-                    '丽莎',
-                    '琴',
-                    '香菱',
-                    '枫原万叶',
-                    '迪卢克',
-                    '温迪',
-                    '可莉',
-                    '早柚',
-                    '托马',
-                    '芭芭拉',
-                    '优菈',
-                    '云堇',
-                    '钟离',
-                    '魈',
-                    '凝光',
-                    '雷电将军',
-                    '北斗',
-                    '甘雨',
-                    '七七',
-                    '刻晴',
-                    '神里绫华',
-                    '戴因斯雷布',
-                    '雷泽',
-                    '神里绫人',
-                    '罗莎莉亚',
-                    '阿贝多',
-                    '八重神子',
-                    '宵宫',
-                    '若陀龙王',
-                    '九条裟罗',
-                    '夜兰',
-                    '珊瑚宫心海',
-                    '五郎',
-                    '散兵',
-                    '女士',
-                    '达达利亚',
-                    '莫娜',
-                    '班尼特',
-                    '申鹤',
-                    '行秋',
-                    '烟绯',
-                    '久岐忍',
-                    '辛焱',
-                    '砂糖',
-                    '胡桃',
-                    '重云',
-                    '菲谢尔',
-                    '诺艾尔',
-                    '迪奥娜',
-                    '鹿野院平藏'
-                ],
-                崩坏3: [
-                    '琪亚娜',
-                    '爱莉希雅',
-                    '卡莲',
-                    '八重樱',
-                    '雷电芽衣',
-                    '布洛妮娅',
-                    '希儿',
-                    '明日香',
-                    '符华',
-                    '德丽莎',
-                    '渡鸦',
-                    '芽衣'
-                ],
-                崩坏星穹铁道: [
-                    '开拓者女',
-                    '开拓者男',
-                    '三月七',
-                    '丹恒',
-                    '希露瓦',
-                    '姬子',
-                    '瓦尔特',
-                    '艾丝妲',
-                    '布洛妮娅',
-                    '希儿',
-                    '杰帕德',
-                    '景元'
-                ],
-                赛马娘: [
-                    '特别周',
-                    '无声铃鹿',
-                    '东海帝王',
-                    '丸善斯基',
-                    '富士奇迹',
-                    '小栗帽',
-                    '黄金船',
-                    '伏特加',
-                    '大和赤骥',
-                    '目白麦昆',
-                    '神鹰',
-                    '好歌剧',
-                    '成田白仁',
-                    '草上飞'
-                ],
-                其他: ['塔菲', '阿梓', '奶绿', '星瞳', '向晚', '嘉然', '乃琳', '贝拉', '珈乐']
-            }
-
-            const allSpeakers = []
-            for (const [category, names] of Object.entries(speakers)) {
-                for (const name of names) {
-                    allSpeakers.push({ name, category })
+            try {
+                const { speakers, languages } = await fetchVitsMeta()
+                return {
+                    success: true,
+                    source: 'vits',
+                    api: VITS_BASE_URL,
+                    count: speakers.length,
+                    speakers,
+                    languages,
+                    usage: '使用 send_tts 工具发送语音，speaker 参数填写音色名；支持简称，如 甘雨 会自动匹配 甘雨（椰羊）',
+                    note: '音色列表来自服务端，服务端更换模型后自动更新'
                 }
-            }
-
-            return {
-                success: true,
-                source: 'vits',
-                api: 'https://mikusfan-vits-uma-genshin-honkai.hf.space',
-                count: allSpeakers.length,
-                categories: Object.keys(speakers),
-                speakers,
-                popular: ['派蒙', '甘雨', '雷电将军', '胡桃', '刻晴', '神里绫华', '钟离', '琪亚娜', '爱莉希雅'],
-                usage: '使用 send_tts 工具发送语音，speaker 参数填写角色名',
-                note: '角色名需要准确匹配，支持中文名。如果生成失败请尝试换个角色'
+            } catch (err) {
+                const hint = err.response?.status === 401 ? '（401：令牌无效，请检查 VITS_AUTH_TOKEN）' : ''
+                return { success: false, error: `获取VITS音色失败: ${err.message}${hint}` }
             }
         }
     },
 
     {
         name: 'send_tts',
-        description: '发送TTS语音消息（使用 VITS 语音合成，支持多种角色和语言）',
+        description: '发送TTS语音消息（使用 VITS 语音合成，音色列表实时读取自服务端）',
         inputSchema: {
             type: 'object',
             properties: {
@@ -571,11 +738,12 @@ export const voiceTools = [
                 },
                 speaker: {
                     type: 'string',
-                    description: '角色/音色名，默认"派蒙"。常用角色：派蒙、凯亚、甘雨、雷电将军等'
+                    description:
+                        '音色名，默认"派蒙"。支持简称（如 甘雨 会匹配 甘雨（椰羊）），完整列表用 get_tts_speakers 查询'
                 },
                 lang: {
                     type: 'string',
-                    description: '语言（自动检测），可选：中文/English/日语'
+                    description: '语言（自动检测），可选：中文/日语；英文文本使用中文模式'
                 },
                 noise_scale: {
                     type: 'number',
@@ -629,69 +797,65 @@ export const voiceTools = [
                     }
                 }
 
+                // 文本长度限制
                 const text = args.text.trim()
-                const speaker = (args.speaker || '派蒙').trim() || '派蒙'
-                const lang = args.lang || detectLanguage(text)
+                const maxTextLength = Number(config.get('voice.maxTextLength')) || 500
+                if (text.length > maxTextLength) {
+                    return { success: false, error: `文本过长（${text.length} > ${maxTextLength} 字），请分段发送` }
+                }
+
+                // 音色与语言：枚举实时读取自服务端，再解析成服务端接受的精确值
+                const meta = await fetchVitsMeta()
+                const speakerInput = (args.speaker || '派蒙').trim() || '派蒙'
+                const speaker = resolveVitsSpeaker(speakerInput, meta.speakers)
+                const lang = resolveVitsLanguage(args.lang, text, meta.languages)
                 const noise_scale = safePositiveNumber(args.noise_scale, 0.6)
                 const noise_scale_w = safePositiveNumber(args.noise_scale_w, 0.668)
-                const length_scale = safePositiveNumber(args.length_scale, 1.0)
+                const length_scale = safePositiveNumber(args.length_scale, 1.2)
 
                 logger.info(
-                    `[send_tts] 开始生成: speaker=${speaker}, lang=${lang}, text="${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`
+                    `[send_tts] 开始生成: api=${VITS_BASE_URL}, speaker=${speaker}${speaker !== speakerInput ? `(输入 ${speakerInput})` : ''}, lang=${lang}, text="${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`
                 )
 
-                // 构建 API 请求
-                const payload = {
-                    fn_index: 0,
-                    data: [text, lang, speaker, noise_scale, noise_scale_w, length_scale],
-                    session_hash: randomUUID()
-                }
-
-                const response = await axios.post(VITS_API_URL, payload, {
-                    timeout: 30000 // 30秒超时
+                // 合成语音：服务端只返回文件信息，音频在下一步单独下载
+                const speech = await callVitsSpeech({
+                    text,
+                    language: lang,
+                    speaker,
+                    noiseScale: noise_scale,
+                    noiseScaleW: noise_scale_w,
+                    lengthScale: length_scale
                 })
-                const data = response.data
-
-                // 检查 API 响应
-                if (!(data?.data && data.data[1])) {
-                    logger.warn(`[send_tts] API 返回无效数据: ${JSON.stringify(data)}`)
+                if (!speech.audio) {
                     return {
                         success: false,
-                        error: '生成失败，API 未返回有效数据。可能是角色名不正确或服务繁忙，请检查角色名或稍后再试'
+                        error: `生成失败: ${speech.message || '服务未返回音频'}`,
+                        extra: speech.extra
                     }
                 }
 
-                const audioData = data.data[1]
+                const audioUrl = resolveVitsAudioUrl(speech.audio)
+                if (!audioUrl) {
+                    logger.warn(`[send_tts] 服务返回的音频缺少地址: ${JSON.stringify(speech.audio)}`)
+                    return { success: false, error: '服务返回的音频缺少下载地址' }
+                }
+
+                // 协议端无法直接转码远端地址，先下载再转 base64
+                logger.debug(`[send_tts] 下载合成音频: ${audioUrl}`)
                 let recordData = ''
-
-                // 支持两种音频数据格式
-                if (audioData.data) {
-                    // 格式1: Base64 编码的音频数据
-                    const base64 = audioData.data.split(',')[1] || audioData.data
-                    recordData = `base64://${base64}`
-                    logger.debug(`[send_tts] 使用 base64 音频数据 (${base64.length} 字符)`)
-                } else if (audioData.name) {
-                    // 格式2: 服务器上的文件路径 - 需要下载并转为base64
-                    // 远程URL无法被ICQQ直接转码为AMR，必须先下载
-                    const audioUrl = `https://mikusfan-vits-uma-genshin-honkai.hf.space/file=${audioData.name}`
-                    logger.debug(`[send_tts] 下载远程音频: ${audioUrl}`)
-                    try {
-                        const audioResponse = await axios.get(audioUrl, {
-                            responseType: 'arraybuffer',
-                            timeout: 15000
-                        })
-                        const base64Audio = Buffer.from(audioResponse.data).toString('base64')
-                        recordData = `base64://${base64Audio}`
-                        logger.debug(`[send_tts] 音频已转为 base64 (${base64Audio.length} 字符)`)
-                    } catch (downloadErr) {
-                        logger.error(`[send_tts] 下载音频失败: ${downloadErr.message}`)
-                        return { success: false, error: `下载音频失败: ${downloadErr.message}` }
-                    }
-                }
-
-                if (!recordData) {
-                    logger.warn(`[send_tts] API 返回数据格式异常: ${JSON.stringify(audioData)}`)
-                    return { success: false, error: 'API 返回数据格式异常，无法获取音频' }
+                try {
+                    const audioResponse = await axios.get(audioUrl, {
+                        responseType: 'arraybuffer',
+                        timeout: VITS_AUDIO_TIMEOUT,
+                        maxContentLength: VITS_AUDIO_MAX_BYTES,
+                        headers: VITS_AUTH_HEADERS
+                    })
+                    const base64Audio = Buffer.from(audioResponse.data).toString('base64')
+                    recordData = `base64://${base64Audio}`
+                    logger.debug(`[send_tts] 音频已转为 base64 (${base64Audio.length} 字符)`)
+                } catch (downloadErr) {
+                    logger.error(`[send_tts] 下载音频失败: ${downloadErr.message}`)
+                    return { success: false, error: `下载音频失败: ${downloadErr.message}` }
                 }
 
                 // 发送语音消息
@@ -707,7 +871,6 @@ export const voiceTools = [
 
                 logger.debug(`[send_tts] 发送目标: ${targetInfo}`)
 
-                // 检查发送结果
                 if (result.success) {
                     logger.info(`[send_tts] 语音发送成功: message_id=${result.message_id}`)
                     return {
@@ -741,12 +904,28 @@ export const voiceTools = [
 
                 logger.error(`[send_tts] 语音生成出错: ${errMsg}`)
 
-                // 根据错误类型返回友好的错误信息
+                // 本地校验类错误（音色不存在、文本过长、SSE 报错等）已是可读文案，直接透传
+                if (!err.isAxiosError) {
+                    return { success: false, error: err.message }
+                }
+
+                // 网络类错误给出可操作的提示
                 if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT') {
                     return { success: false, error: 'VITS 服务请求超时，请稍后再试' }
-                } else if (err.response?.status >= 500) {
+                }
+                if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND' || err.code === 'EHOSTUNREACH') {
+                    return { success: false, error: `VITS 服务不可达（${err.code}），请检查服务状态或稍后重试` }
+                }
+                if (err.response?.status === 401) {
+                    return {
+                        success: false,
+                        error: 'VITS 服务鉴权失败（401），请确认插件内 VITS_AUTH_TOKEN 与服务端 auth_tokens.txt 一致'
+                    }
+                }
+                if (err.response?.status >= 500) {
                     return { success: false, error: 'VITS 服务暂时不可用，请稍后再试' }
-                } else if (err.response?.status === 404) {
+                }
+                if (err.response?.status === 404) {
                     return { success: false, error: 'VITS API 地址无效' }
                 }
 

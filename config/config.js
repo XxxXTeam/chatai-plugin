@@ -639,9 +639,16 @@ class Config {
                 enabled: false,
                 storage: 'database', // 使用数据库存储
                 autoExtract: true, // 自动从对话提取记忆
-                pollInterval: 5, // 轮询间隔（分钟）
+                pollInterval: 180, // 轮询间隔（分钟）——默认 3 小时，避免频繁总结
+                minPollInterval: 180, // 同一用户两次轮询总结的最小间隔（分钟）
+                pollBatchSize: 20, // 单轮轮询最多处理的用户数
                 maxMemories: 50, // 每用户最大记忆数
                 model: '', // 记忆提取使用的模型（留空使用默认模型）
+                // 记忆 LLM 频率与并发控制
+                llmConcurrency: 2, // 记忆相关 LLM 请求的全局并发上限（1-8）
+                llmTimeoutMs: 60000, // 单次记忆 LLM 请求超时（毫秒）
+                summarizeCooldownMinutes: 120, // 同一用户两次总结的最小间隔（分钟）
+                minNewMessages: 6, // 冷却期满后还需累计的新消息条数
                 // 群聊上下文采集
                 groupContext: {
                     enabled: true, // 启用群聊上下文采集
