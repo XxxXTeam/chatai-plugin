@@ -1,9 +1,12 @@
 /* eslint-disable */
 
-const BUILD_VERSION = '2451d6da3c62'
+const BUILD_VERSION = 'a6b76c3b5763'
 const CACHE_NAME = 'chatai-assets-' + BUILD_VERSION
 const BASE = '/chatai'
 const PRECACHE = [
+    "/chatai/_next/static/_yAGrAeUpWzafpkQ_IeXA/_buildManifest.js",
+    "/chatai/_next/static/_yAGrAeUpWzafpkQ_IeXA/_clientMiddlewareManifest.json",
+    "/chatai/_next/static/_yAGrAeUpWzafpkQ_IeXA/_ssgManifest.js",
     "/chatai/_next/static/chunks/08c50fa76aa9b4fb.js",
     "/chatai/_next/static/chunks/0c5ed3ae3e630310.js",
     "/chatai/_next/static/chunks/0e9552a4f5da982b.js",
@@ -19,6 +22,7 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/2859f476bcae8cb4.js",
     "/chatai/_next/static/chunks/28af3cff079e4919.js",
     "/chatai/_next/static/chunks/2ab531ed1a00e36e.js",
+    "/chatai/_next/static/chunks/34d1219374870213.js",
     "/chatai/_next/static/chunks/355bb872143ef3d1.js",
     "/chatai/_next/static/chunks/36bf899908015437.js",
     "/chatai/_next/static/chunks/375bbc7bec34379e.js",
@@ -71,13 +75,9 @@ const PRECACHE = [
     "/chatai/_next/static/chunks/e22f627f748fbac3.js",
     "/chatai/_next/static/chunks/f1ab86f6205d9b07.js",
     "/chatai/_next/static/chunks/f2b9bd3d7dd29b78.js",
-    "/chatai/_next/static/chunks/fce9071663c272c0.js",
     "/chatai/_next/static/chunks/ff1a16fafef87110.js",
     "/chatai/_next/static/chunks/ffc6f60fe91ac0a9.js",
     "/chatai/_next/static/chunks/turbopack-6f7fb830c500f7c9.js",
-    "/chatai/_next/static/d6pUFwojxboCCw0Imgwdr/_buildManifest.js",
-    "/chatai/_next/static/d6pUFwojxboCCw0Imgwdr/_clientMiddlewareManifest.json",
-    "/chatai/_next/static/d6pUFwojxboCCw0Imgwdr/_ssgManifest.js",
     "/chatai/_next/static/media/favicon.0b3bf435.ico",
     "/chatai/favicon.ico",
     "/chatai/file.svg",
