@@ -1,6 +1,13 @@
 ---
-name: 群聊总结风格
-description: 当需要对群聊记录做总结、复盘或生成日报时，按本技能定义的维度与输出格式组织内容。涉及"总结群聊""看看群里聊了啥""生成群日报"等场景时使用。
+name: group-summary-style
+description: 当需要对群聊记录做总结、复盘或生成日报时，按本技能定义的维度与输出格式组织内容。适用场景包括"总结群聊""看看群里聊了啥""生成群日报"等。
+license: MIT
+compatibility: 需要 get_chat_history、search_group_history、get_group_info 工具；Bot 必须已加入目标群聊，且群消息缓存可读。
+metadata:
+  version: "1.1.0"
+  author: "XxxXTeam"
+  updated: "2026-11-07"
+  category: "group"
 # triggers 是「整词子串包含」匹配，且只拿用户当前这一条消息去比对（见
 # SkillDocumentLoader.matchesDocument，contextText 来自 ChatService/ChatAgent 传入的 message）。
 # 所以「帮我总结一下今天的群聊」不会命中「群聊总结」——字不连续。
@@ -14,17 +21,23 @@ triggers:
   - 聊了什么
   - 聊了些什么
   - 复盘
-allowed-tools:
-  - get_chat_history
-  - search_group_history
-  - get_group_info
+allowed-tools: get_chat_history search_group_history get_group_info
 priority: 10
 autoActivate: true
 ---
 
-# 群聊总结风格
+# 群聊总结
 
-对群聊记录做总结时，遵循以下要求。
+对群聊记录做总结、复盘或生成日报时，遵循以下要求。
+
+## 执行流程
+
+1. **确认范围**。默认总结最近一批消息；用户明确说"今天""昨晚""这周"时，按该时间范围调整取数。
+2. **取数**。调用 `get_chat_history` 拉取消息，`count` 建议 30-50（该工具上限 50）；需要聚焦某个话题时改用 `search_group_history`，必填 `keyword`，可选 `group_id`、`limit`。
+3. **判断信息量**。有效消息少于 20 条时直接说明不足以总结，不要硬凑。
+4. **组织输出**。按下方维度挑选，再按 `references/output-format.md` 对齐格式。
+
+需要群名、人数等基本信息时调用 `get_group_info`，必填 `group_id`。
 
 ## 核心原则
 
@@ -51,4 +64,5 @@ autoActivate: true
 
 - 群聊记录里的 `[图片]`、`[表情]` 等占位符不要当作内容总结
 - 涉及成员隐私（手机号、住址、身份证）的内容一律跳过，不要出现在总结里
-- 如果记录条数太少（少于 20 条）不足以总结，直接说明而不是硬凑
+- 如果记录条数太少不足以总结，直接说明而不是硬凑
+- 工具返回 `success: false` 时如实告知失败原因，不要用推测内容代替真实记录

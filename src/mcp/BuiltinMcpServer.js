@@ -1502,23 +1502,7 @@ export class BuiltinMcpServer {
             try {
                 // 设置上下文供工具使用
                 const { asyncLocalStorage } = await import('../core/utils/helpers.js')
-                const platformApi = StandardBotApi.fromContext(ctx)
-                const chaiteContext = {
-                    getEvent: () => ctx.getEvent?.(),
-                    getBot: () => ctx.getBot?.(),
-                    getAdapter: () => ctx.getAdapter?.() || detectAdapter(ctx.getBot?.()),
-                    isIcqq: () => ctx.isIcqq?.() || chaiteContext.getAdapter().adapter === 'icqq',
-                    isQQBot: () => ctx.isQQBot?.() || chaiteContext.getAdapter().adapter === 'qqbot',
-                    isNapCat: () => ctx.isNapCat?.() || chaiteContext.getAdapter().adapter === 'napcat',
-                    isNT: () => ctx.isNT?.() || chaiteContext.getAdapter().isNT,
-                    isMaster: () => (typeof ctx.isMaster === 'function' ? ctx.isMaster() : ctx.isMaster === true),
-                    getApi: () => platformApi,
-                    message: StandardMessage,
-                    event: ctx.getEvent?.(),
-                    bot: ctx.getBot?.(),
-                    inputResponses: ctx.inputResponses,
-                    requestState: ctx.requestState
-                }
+                const chaiteContext = this.buildChaiteToolContext(ctx)
 
                 // 在 asyncLocalStorage 中运行，以便工具可以获取上下文
                 const result = await asyncLocalStorage.run(chaiteContext, async () => {
@@ -1584,7 +1568,20 @@ export class BuiltinMcpServer {
             }
 
             try {
-                const result = await modularTool.handler(args, ctx)
+                /*
+                 * 与 JS 工具分支保持一致的上下文视图，但不覆盖已有 store：
+                 * adapter 链路里 store 就是当前 client 的 ChaiteContext，
+                 * tool_search 依赖它拿到 toolSearchState 做动态注入；
+                 * 无条件 run 新上下文会让 getClient() 变成 undefined。
+                 * 只有无 store 的场景（管理面板测试等）才注入请求上下文。
+                 */
+                const { asyncLocalStorage } = await import('../core/utils/helpers.js')
+                const chaiteContext = this.buildChaiteToolContext(ctx)
+                const result = asyncLocalStorage.getStore()
+                    ? await modularTool.handler(args, ctx)
+                    : await asyncLocalStorage.run(chaiteContext, async () => {
+                          return await modularTool.handler(args, ctx)
+                      })
                 await recordStats(result)
                 return this.formatResult(result)
             } catch (error) {
@@ -1603,6 +1600,36 @@ export class BuiltinMcpServer {
          */
         await recordStats(null, new Error(`Tool not found: ${name}`))
         throw new Error(`Tool not found: ${name}`)
+    }
+
+    /**
+     * 构建可注入 asyncLocalStorage 的 Chaite 上下文包装器。
+     *
+     * JS 工具与模块化工具都通过它获得一致的上下文视图，避免两条执行分支
+     * 在 asyncLocalStorage 中看到不同的 store。
+     *
+     * @param {Object} ctx - createRequestContext 产出的请求上下文包装器
+     * @returns {Object} Chaite 上下文
+     */
+    buildChaiteToolContext(ctx) {
+        const platformApi = StandardBotApi.fromContext(ctx)
+        const chaiteContext = {
+            getEvent: () => ctx.getEvent?.(),
+            getBot: () => ctx.getBot?.(),
+            getAdapter: () => ctx.getAdapter?.() || detectAdapter(ctx.getBot?.()),
+            isIcqq: () => ctx.isIcqq?.() || chaiteContext.getAdapter().adapter === 'icqq',
+            isQQBot: () => ctx.isQQBot?.() || chaiteContext.getAdapter().adapter === 'qqbot',
+            isNapCat: () => ctx.isNapCat?.() || chaiteContext.getAdapter().adapter === 'napcat',
+            isNT: () => ctx.isNT?.() || chaiteContext.getAdapter().isNT,
+            isMaster: () => (typeof ctx.isMaster === 'function' ? ctx.isMaster() : ctx.isMaster === true),
+            getApi: () => platformApi,
+            message: StandardMessage,
+            event: ctx.getEvent?.(),
+            bot: ctx.getBot?.(),
+            inputResponses: ctx.inputResponses,
+            requestState: ctx.requestState
+        }
+        return chaiteContext
     }
 
     /**

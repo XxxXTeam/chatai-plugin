@@ -165,6 +165,26 @@ function normalizeModelTemperatures(modelTemperatures) {
     return Object.keys(normalized).length > 0 ? normalized : null
 }
 
+/**
+ * 规范化渠道级官方搜索配置。
+ *
+ * `enabled: true` 表示该渠道强制使用官方搜索接口（失败不降级第三方），
+ * `enabled: false` 表示该渠道禁用官方搜索（只用免费引擎），未设置则跟随全局 auto。
+ *
+ * @param {Record<string, any>|undefined|null} input
+ * @returns {{enabled?: boolean, maxUses?: number}|null} 规范化后的配置；无有效字段返回 null
+ */
+function normalizeNativeSearch(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null
+    const result = {}
+    if (typeof input.enabled === 'boolean') result.enabled = input.enabled
+    const maxUses = Number(input.maxUses)
+    if (Number.isFinite(maxUses) && maxUses > 0) {
+        result.maxUses = Math.min(Math.max(Math.trunc(maxUses), 1), 20)
+    }
+    return Object.keys(result).length > 0 ? result : null
+}
+
 function pickModelMappingTarget(channel, mappingKey, target) {
     const targets = normalizeModelMappingTarget(target)
     if (targets.length === 0) return null
@@ -666,6 +686,8 @@ export class ChannelManager {
             responsePath: channelData.responsePath || channelData.endpoints?.responses || '',
             experimental: channelData.experimental || {},
             openaiResponses: channelData.openaiResponses || {},
+            // 渠道级官方搜索覆盖：enabled=true 强制官方且失败不降级
+            nativeSearch: normalizeNativeSearch(channelData.nativeSearch),
             chatPath: channelData.chatPath || '',
             modelsPath: channelData.modelsPath || '',
             overrides: {
@@ -770,6 +792,7 @@ export class ChannelManager {
             'responsePath',
             'experimental',
             'openaiResponses',
+            'nativeSearch',
             'timeout',
             'retry',
             'quota',
@@ -816,6 +839,11 @@ export class ChannelManager {
                         disableTemperature: updates.overrides?.disableTemperature === true,
                         modelTemperatures: normalizeModelTemperatures(updates.overrides?.modelTemperatures)
                     }
+                } else if (field === 'nativeSearch') {
+                    /* null（或全部字段非法）表示清除渠道级覆盖，回到全局 auto */
+                    const normalized = normalizeNativeSearch(updates.nativeSearch)
+                    if (normalized) channel.nativeSearch = normalized
+                    else delete channel.nativeSearch
                 } else {
                     channel[field] = updates[field]
                 }
@@ -2135,6 +2163,8 @@ export class ChannelManager {
                 responsePath: ch.responsePath,
                 experimental: ch.experimental,
                 openaiResponses: ch.openaiResponses,
+                // 渠道级官方搜索覆盖（enabled=true 强制官方且失败不降级）
+                nativeSearch: ch.nativeSearch,
                 overrides: ch.overrides,
                 imageConfig: ch.imageConfig,
                 // 自定义路径配置

@@ -11,7 +11,7 @@ import {
 } from '../AbstractClient.js'
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
-import { resolveToolChoice } from '../tooling.js'
+import { mergeToolDefinitions, resolveToolChoice } from '../tooling.js'
 
 const logger = chatLogger
 
@@ -229,8 +229,16 @@ export class ClaudeClient extends AbstractClient {
         const toolConvert = getFromChaiteToolConverter('claude')
         const convertedTools = this.tools.map(toolConvert).filter(Boolean)
         const choiceResolution = resolveToolChoice(options, convertedTools, 'claude')
-        const tools = choiceResolution.tools.length > 0 ? choiceResolution.tools : undefined
+        let tools = choiceResolution.tools.length > 0 ? choiceResolution.tools : undefined
         options._exposedTools = tools || []
+        /*
+         * 官方 hosted search：Anthropic 的服务端 web_search 工具与普通 function tools
+         * 同处 tools 数组，由服务端执行并返回 web_search_tool_result 块。
+         */
+        const hostedSearch = this.options?.nativeSearch
+        if (hostedSearch?.enabled && hostedSearch.provider === 'claude' && hostedSearch.tool) {
+            tools = mergeToolDefinitions(tools || [], [hostedSearch.tool])
+        }
 
         const requestPayload = {
             model,
@@ -238,7 +246,7 @@ export class ClaudeClient extends AbstractClient {
             system: systemPrompt || undefined,
             messages,
             tools,
-            tool_choice: tools ? choiceResolution.toolChoice : undefined
+            tool_choice: choiceResolution.tools.length > 0 ? choiceResolution.toolChoice : undefined
         }
         /* 禁用温度传递时 temperature 为 undefined，不写入以避免携带 */
         if (Number.isFinite(options.temperature)) {
@@ -355,8 +363,16 @@ export class ClaudeClient extends AbstractClient {
         const toolConvert = getFromChaiteToolConverter('claude')
         const convertedTools = this.tools.map(toolConvert).filter(Boolean)
         const choiceResolution = resolveToolChoice(options, convertedTools, 'claude')
-        const tools = choiceResolution.tools.length > 0 ? choiceResolution.tools : undefined
+        let tools = choiceResolution.tools.length > 0 ? choiceResolution.tools : undefined
         options._exposedTools = tools || []
+        /*
+         * 官方 hosted search：Anthropic 的服务端 web_search 工具与普通 function tools
+         * 同处 tools 数组，由服务端执行并返回 web_search_tool_result 块。
+         */
+        const hostedSearch = this.options?.nativeSearch
+        if (hostedSearch?.enabled && hostedSearch.provider === 'claude' && hostedSearch.tool) {
+            tools = mergeToolDefinitions(tools || [], [hostedSearch.tool])
+        }
 
         const requestPayload = {
             model,
@@ -364,7 +380,7 @@ export class ClaudeClient extends AbstractClient {
             system: systemPrompt || undefined,
             messages,
             tools,
-            tool_choice: tools ? choiceResolution.toolChoice : undefined,
+            tool_choice: choiceResolution.tools.length > 0 ? choiceResolution.toolChoice : undefined,
             stream: true
         }
         /* 禁用温度传递时 temperature 为 undefined，不写入以避免携带 */

@@ -8,6 +8,13 @@ import { mcpManager } from '../../mcp/McpManager.js'
 import { builtinMcpServer, resolveDangerousTools } from '../../mcp/BuiltinMcpServer.js'
 import { getToolIdentity } from '../../core/adapters/tooling.js'
 import { customToolService, CustomToolValidationError } from '../tools/CustomToolService.js'
+import {
+    getSearchSettings,
+    getToolSearchSettings,
+    normalizeSearchSettings,
+    normalizeToolSearchSettings
+} from '../search/SearchSettings.js'
+import { clearSearchCache } from '../search/SearchService.js'
 import { chatLogger } from '../../core/utils/logger.js'
 
 const defaultToolRouteServices = Object.freeze({ config, mcpManager, builtinMcpServer, customToolService })
@@ -145,7 +152,9 @@ router.get('/builtin/config', async (req, res) => {
                 approvalHighRiskTools: builtinConfig.approvalHighRiskTools || [],
                 approvalBypassTools: builtinConfig.approvalBypassTools || [],
                 approvalAllowSessionBypass: builtinConfig.approvalAllowSessionBypass !== false,
-                approvalSessionBypassMaxRisk: builtinConfig.approvalSessionBypassMaxRisk || 'medium'
+                approvalSessionBypassMaxRisk: builtinConfig.approvalSessionBypassMaxRisk || 'medium',
+                toolSearch: getToolSearchSettings(),
+                search: getSearchSettings()
             })
         )
     } catch (error) {
@@ -170,7 +179,9 @@ router.put('/builtin/config', async (req, res) => {
             approvalHighRiskTools,
             approvalBypassTools,
             approvalAllowSessionBypass,
-            approvalSessionBypassMaxRisk
+            approvalSessionBypassMaxRisk,
+            toolSearch,
+            search
         } = req.body || {}
         const routeConfig = toolRouteServices.config
         const currentConfig = routeConfig.get('builtinTools') || {}
@@ -200,10 +211,17 @@ router.put('/builtin/config', async (req, res) => {
             approvalSessionBypassMaxRisk:
                 approvalSessionBypassMaxRisk !== undefined
                     ? approvalSessionBypassMaxRisk
-                    : currentConfig.approvalSessionBypassMaxRisk
+                    : currentConfig.approvalSessionBypassMaxRisk,
+            toolSearch: toolSearch !== undefined ? normalizeToolSearchSettings(toolSearch) : currentConfig.toolSearch,
+            search: search !== undefined ? normalizeSearchSettings(search) : currentConfig.search
         }
 
         await routeConfig.set('builtinTools', newConfig)
+
+        // 搜索配置变更后旧缓存不再可信
+        if (search !== undefined) {
+            clearSearchCache()
+        }
 
         try {
             await toolRouteServices.mcpManager.refreshBuiltinTools()

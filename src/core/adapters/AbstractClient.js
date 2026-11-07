@@ -1904,10 +1904,21 @@ export class AbstractClient {
         this.toolCallLimitConfig = options.toolCallLimitConfig || DEFAULT_TOOL_CALL_LIMIT
         /** @type {Function|null} 工具调用中间消息回调 */
         this.onMessageWithToolCall = options.onMessageWithToolCall || null
+        /**
+         * 工具延迟加载状态。tool_search 工具 handler 通过 client.toolSearchState
+         * 读取候选工具并动态注入 client.tools，必须在构造时同步到实例属性。
+         */
+        this.toolSearchState = options.toolSearchState || null
         if (context) {
             this.context = context
-            this.context.setClient(this)
         }
+        /*
+         * 无论是否传入外部 context，都必须把 client 绑定到 context。
+         * asyncLocalStorage.run(this.context) 是工具侧获取当前客户端的唯一入口
+         * （asyncLocalStorage.getStore()?.getClient()），不绑定会让 tool_search
+         * 之类的工具拿不到 client，动态注入工具直接失效。
+         */
+        this.context.setClient(this)
     }
 
     /**
@@ -2701,7 +2712,9 @@ export class AbstractClient {
             'send_forward_message',
             'send_ai_voice',
             'at_user',
-            'poke_user'
+            'poke_user',
+            // tool_search 会动态注入新工具，必须与同轮其它调用串行，避免注入时序不确定
+            'tool_search'
         ]
         const sequentialCalls = []
         const parallelCalls = []

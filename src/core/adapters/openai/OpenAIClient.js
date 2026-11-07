@@ -1582,6 +1582,14 @@ export class OpenAIClient extends AbstractClient {
             : useResponsesApi
               ? mergeResponseTools(choiceResolution.tools, openaiResponses)
               : choiceResolution.tools
+        /*
+         * 官方 hosted search 只在 Responses 接口可用。
+         * 由 LlmService 依当前渠道解析，第三方中转站与非官方域名不会走到这里。
+         */
+        const hostedSearch = this.options?.nativeSearch
+        if (useResponsesApi && !choiceResolution.disabled && hostedSearch?.enabled && hostedSearch.tool) {
+            tools = mergeToolDefinitions(tools, [hostedSearch.tool])
+        }
         let toolChoice = choiceResolution.toolChoice
 
         // Gemini API 要求 enum 值必须是字符串类型，清理所有工具定义
@@ -2042,11 +2050,19 @@ export class OpenAIClient extends AbstractClient {
             convertedTools,
             useResponsesApi ? 'openai-responses' : 'openai-chat'
         )
-        const tools = choiceResolution.disabled
+        let tools = choiceResolution.disabled
             ? []
             : useResponsesApi
               ? mergeResponseTools(choiceResolution.tools, openaiResponses)
               : choiceResolution.tools
+        /*
+         * 官方 hosted search 只在 Responses 接口可用。
+         * 由 LlmService 依当前渠道解析，第三方中转站与非官方域名不会走到这里。
+         */
+        const hostedSearch = this.options?.nativeSearch
+        if (useResponsesApi && !choiceResolution.disabled && hostedSearch?.enabled && hostedSearch.tool) {
+            tools = mergeToolDefinitions(tools, [hostedSearch.tool])
+        }
         let toolChoice = choiceResolution.toolChoice
         options._exposedTools = tools
 

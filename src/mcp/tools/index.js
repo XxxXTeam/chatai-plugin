@@ -20,6 +20,7 @@ const toolModules = {
     context: { file: './context.js', export: 'contextTools' },
     media: { file: './media.js', export: 'mediaTools' },
     search: { file: './search.js', export: 'searchTools' },
+    toolSearch: { file: './toolSearch.js', export: 'toolSearchTools' },
     utils: { file: './utils.js', export: 'utilsTools' },
     bot: { file: './bot.js', export: 'botTools' },
     voice: { file: './voice.js', export: 'voiceTools' },
@@ -75,6 +76,12 @@ const categoryMeta = {
         name: '搜索工具',
         description: '搜索引擎、百科、翻译、天气、热搜、油价。用户问事实性问题或需要查询最新信息时调用',
         icon: 'Search'
+    },
+    toolSearch: {
+        name: '工具检索',
+        description:
+            '按关键词检索其它工具并动态加载。仅在开启"工具延迟加载"时随核心工具一起暴露，模型需要某个未加载的工具时调用',
+        icon: 'Compass'
     },
     utils: {
         name: '实用工具',

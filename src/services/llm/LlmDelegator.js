@@ -95,7 +95,12 @@ export async function buildClientForChannel(channel, baseOptions = {}, requestMe
             imageConfig: channel.imageConfig || {},
             ...(channel.timeout ? { timeout: channel.timeout } : {}),
             ...(channel.userAgent ? { userAgent: channel.userAgent } : {}),
-            ...(channel.xff ? { xff: channel.xff } : {})
+            ...(channel.xff ? { xff: channel.xff } : {}),
+            /*
+             * 官方搜索按「实际发送渠道」解析：回退链路会复用同一份 baseOptions，
+             * 若沿用调用方缓存的主渠道配置，会让回退后的渠道套用错误的开关。
+             */
+            nativeSearchChannel: channel
         }
         const mapped = channelManager.getActualModel(channel.id, requestMeta.model)
         if (mapped.actualModel) {
@@ -104,6 +109,7 @@ export async function buildClientForChannel(channel, baseOptions = {}, requestMe
         const client = await LlmService.createClient({
             ...clientOptions,
             adapterType: channel.adapterType,
+            channel,
             enableTools: baseOptions.enableTools !== false && !!baseOptions.preSelectedTools?.length
         })
         return { client, keyIndex: keyInfo.keyIndex }

@@ -9,170 +9,10 @@
  * Node 的 fetch 没有默认超时，外部站点被中间设备黑洞时 await 永不 resolve，
  * 工具 handler 随之挂起，该次 LLM 调用会被无限期阻塞（表现为"机器人不回话了"）。
  */
-import { fetchWithLimit } from './helpers.js'
 import { StandardBotApi } from '../../core/platform/index.js'
+import { searchWeb, fetchPage } from '../../services/search/SearchService.js'
 
 const SEARCH_API_TIMEOUT_MS = 10000
-
-/** 网页抓取原始响应体上限 */
-const SEARCH_PAGE_MAX_BYTES = 5 * 1024 * 1024
-
-/**
- * HTML转Markdown工具函数
- * @param {string} html - HTML内容
- * @returns {string} Markdown内容
- */
-function htmlToMarkdown(html) {
-    if (!html) return ''
-
-    let md = html
-
-    // 移除script和style标签及其内容
-    md = md.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    md = md.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    md = md.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
-
-    // 移除HTML注释
-    md = md.replace(/<!--[\s\S]*?-->/g, '')
-
-    // 处理标题
-    md = md.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n# $1\n')
-    md = md.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n## $1\n')
-    md = md.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n### $1\n')
-    md = md.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, '\n#### $1\n')
-    md = md.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, '\n##### $1\n')
-    md = md.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, '\n###### $1\n')
-
-    // 处理段落和换行
-    md = md.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '\n$1\n')
-    md = md.replace(/<br\s*\/?>/gi, '\n')
-    md = md.replace(/<\/div>/gi, '\n')
-    md = md.replace(/<div[^>]*>/gi, '')
-
-    // 处理链接
-    md = md.replace(/<a[^>]*href=["']([^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
-
-    // 处理图片
-    md = md.replace(/<img[^>]*alt=["']([^"']*)["'][^>]*src=["']([^"']*)["'][^>]*\/?>/gi, '![$1]($2)')
-    md = md.replace(/<img[^>]*src=["']([^"']*)["'][^>]*alt=["']([^"']*)["'][^>]*\/?>/gi, '![$2]($1)')
-    md = md.replace(/<img[^>]*src=["']([^"']*)["'][^>]*\/?>/gi, '![]($1)')
-
-    // 处理加粗和斜体
-    md = md.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
-    md = md.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
-    md = md.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*')
-    md = md.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*')
-
-    // 处理代码
-    md = md.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, '`$1`')
-    md = md.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, '\n```\n$1\n```\n')
-
-    // 处理列表
-    md = md.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n')
-    md = md.replace(/<\/?[uo]l[^>]*>/gi, '\n')
-
-    // 处理引用
-    md = md.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, '> $1\n')
-
-    // 处理表格（简化处理）
-    md = md.replace(/<th[^>]*>([\s\S]*?)<\/th>/gi, '| $1 ')
-    md = md.replace(/<td[^>]*>([\s\S]*?)<\/td>/gi, '| $1 ')
-    md = md.replace(/<tr[^>]*>([\s\S]*?)<\/tr>/gi, '$1|\n')
-    md = md.replace(/<\/?table[^>]*>/gi, '\n')
-    md = md.replace(/<\/?thead[^>]*>/gi, '')
-    md = md.replace(/<\/?tbody[^>]*>/gi, '')
-
-    // 移除剩余的HTML标签
-    md = md.replace(/<[^>]+>/g, '')
-
-    // 解码HTML实体
-    md = md.replace(/&nbsp;/g, ' ')
-    md = md.replace(/&amp;/g, '&')
-    md = md.replace(/&lt;/g, '<')
-    md = md.replace(/&gt;/g, '>')
-    md = md.replace(/&quot;/g, '"')
-    md = md.replace(/&#39;/g, "'")
-    md = md.replace(/&mdash;/g, '—')
-    md = md.replace(/&ndash;/g, '–')
-    md = md.replace(/&copy;/g, '©')
-    md = md.replace(/&reg;/g, '®')
-    md = md.replace(/&hellip;/g, '...')
-    md = md.replace(/&#(\d+);/g, (_, code) => String.fromCharCode(code))
-
-    // 清理多余空白
-    md = md.replace(/\n{3,}/g, '\n\n')
-    md = md.replace(/[ \t]+/g, ' ')
-    md = md.trim()
-
-    return md
-}
-
-/**
- * 从URL获取网页内容并转为Markdown
- * @param {string} url - 网页URL
- * @param {Object} options - 选项
- * @returns {Promise<{title: string, content: string, url: string}>}
- */
-async function fetchUrlToMarkdown(url, options = {}) {
-    const { maxLength = 8000, timeout = 10000 } = options
-
-    try {
-        const {
-            response,
-            buffer,
-            url: finalUrl
-        } = await fetchWithLimit(
-            url,
-            {
-                headers: {
-                    'User-Agent':
-                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
-                }
-            },
-            {
-                timeoutMs: timeout,
-                maxBytes: SEARCH_PAGE_MAX_BYTES,
-                label: '网页抓取'
-            }
-        )
-
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const html = buffer.toString('utf8')
-
-        const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
-        const title = titleMatch ? titleMatch[1].trim() : finalUrl || url
-
-        let mainContent = html
-        const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i)
-        const mainMatch = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i)
-        const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)
-
-        if (articleMatch) mainContent = articleMatch[1]
-        else if (mainMatch) mainContent = mainMatch[1]
-        else if (bodyMatch) mainContent = bodyMatch[1]
-
-        let markdown = htmlToMarkdown(mainContent)
-        if (markdown.length > maxLength) {
-            markdown = markdown.substring(0, maxLength) + '\n\n...[内容已截断]'
-        }
-
-        return {
-            success: true,
-            title,
-            content: markdown,
-            url: finalUrl || url,
-            length: markdown.length
-        }
-    } catch (err) {
-        return {
-            success: false,
-            error: err.name === 'AbortError' ? '请求超时' : err.message,
-            url
-        }
-    }
-}
 
 export const searchTools = [
     {
@@ -188,112 +28,17 @@ export const searchTools = [
             required: ['query']
         },
         handler: async args => {
-            try {
-                const query = args.query
-                const count = Math.min(args.count || 5, 10)
-                const fetchContent = args.fetchContent || false
-
-                // 使用Bing搜索（通过HTML解析）
-                const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${count}`
-
-                const response = await fetch(searchUrl, {
-                    headers: {
-                        'User-Agent':
-                            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
-                    },
-                    signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS)
-                })
-
-                if (!response.ok) {
-                    throw new Error(`Bing搜索请求失败: HTTP ${response.status}`)
-                }
-
-                const html = await response.text()
-                const results = []
-
-                // 解析Bing搜索结果
-                // Bing搜索结果在 <li class="b_algo"> 中
-                const resultPattern = /<li class="b_algo"[^>]*>([\s\S]*?)<\/li>/gi
-                const matches = html.matchAll(resultPattern)
-
-                for (const match of matches) {
-                    if (results.length >= count) break
-
-                    const itemHtml = match[1]
-
-                    // 提取标题和链接
-                    const titleMatch = itemHtml.match(/<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/i)
-                    if (!titleMatch) continue
-
-                    const url = titleMatch[1]
-                    const title = titleMatch[2].replace(/<[^>]+>/g, '').trim()
-
-                    // 过滤非HTTP链接
-                    if (!url.startsWith('http')) continue
-
-                    // 提取摘要
-                    const snippetMatch =
-                        itemHtml.match(/<p[^>]*>([\s\S]*?)<\/p>/i) ||
-                        itemHtml.match(/<div class="b_caption"[^>]*>([\s\S]*?)<\/div>/i)
-                    const snippet = snippetMatch
-                        ? snippetMatch[1]
-                              .replace(/<[^>]+>/g, '')
-                              .trim()
-                              .substring(0, 300)
-                        : ''
-
-                    results.push({ title, url, snippet })
-                }
-
-                // 备用解析方法（如果上面没有找到结果）
-                if (results.length === 0) {
-                    const altPattern = /<h2[^>]*><a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a><\/h2>/gi
-                    const altMatches = html.matchAll(altPattern)
-
-                    for (const match of altMatches) {
-                        if (results.length >= count) break
-                        const url = match[1]
-                        const title = match[2].replace(/<[^>]+>/g, '').trim()
-                        if (url.startsWith('http')) {
-                            results.push({ title, url, snippet: '' })
-                        }
-                    }
-                }
-
-                // 如果需要获取网页内容
-                if (fetchContent && results.length > 0) {
-                    const contentResults = await Promise.all(
-                        results.slice(0, 3).map(async r => {
-                            const pageContent = await fetchUrlToMarkdown(r.url, { maxLength: 3000 })
-                            return {
-                                ...r,
-                                pageContent: pageContent.success ? pageContent.content : null,
-                                fetchError: pageContent.success ? null : pageContent.error
-                            }
-                        })
-                    )
-
-                    return {
-                        success: true,
-                        query,
-                        engine: 'bing',
-                        count: contentResults.length,
-                        results: contentResults
-                    }
-                }
-
-                return {
-                    success: true,
-                    query,
-                    engine: 'bing',
-                    count: results.length,
-                    results
-                }
-            } catch (err) {
-                return { success: false, error: `Bing搜索失败: ${err.message}` }
+            const result = await searchWeb(args.query, {
+                provider: 'bing',
+                count: args.count,
+                fetchContent: args.fetchContent === true
+            })
+            if (result.success) {
+                result.engine = 'bing'
+            } else {
+                result.error = `Bing搜索失败: ${result.error}`
             }
+            return result
         }
     },
 
@@ -309,86 +54,33 @@ export const searchTools = [
             required: ['url']
         },
         handler: async args => {
-            return await fetchUrlToMarkdown(args.url, { maxLength: args.maxLength || 8000 })
+            return await fetchPage(args.url, { maxLength: args.maxLength })
         }
     },
 
     {
         name: 'web_search',
         description:
-            '使用搜索引擎搜索内容（支持bing和duckduckgo）。当用户询问最新信息、新闻、不确定的事实性问题时，应优先调用此工具搜索获取最新数据再回答。',
+            '联网搜索最新信息。当用户询问新闻、时事、版本发布、价格、比赛结果等可能随时间变化的事实时，调用此工具搜索后再回答。后端自动优先使用当前渠道的官方搜索接口，不可用时回退到免费引擎。',
         inputSchema: {
             type: 'object',
             properties: {
                 query: { type: 'string', description: '搜索关键词' },
-                engine: { type: 'string', description: '搜索引擎：bing, duckduckgo', enum: ['bing', 'duckduckgo'] },
-                count: { type: 'number', description: '返回结果数量，默认5' }
+                provider: {
+                    type: 'string',
+                    description: '搜索后端：auto自动选择（默认）、bing、duckduckgo'
+                },
+                count: { type: 'number', description: '返回结果数量，默认5' },
+                fetchContent: { type: 'boolean', description: '是否抓取前几条结果的网页正文，默认false' }
             },
             required: ['query']
         },
         handler: async args => {
-            try {
-                const query = args.query
-                const count = args.count || 5
-                const engine = args.engine || 'bing'
-
-                // 优先使用Bing搜索
-                if (engine === 'bing') {
-                    // 调用bing_search工具
-                    const bingTool = searchTools.find(t => t.name === 'bing_search')
-                    if (bingTool) {
-                        return await bingTool.handler({ query, count })
-                    }
-                }
-
-                // 使用 DuckDuckGo Instant Answer API（免费无需API Key）
-                if (engine === 'duckduckgo') {
-                    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`
-                    const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS) })
-                    const data = await response.json()
-
-                    const results = []
-
-                    // 添加摘要结果
-                    if (data.Abstract) {
-                        results.push({
-                            title: data.Heading || 'Summary',
-                            snippet: data.Abstract,
-                            url: data.AbstractURL,
-                            source: data.AbstractSource
-                        })
-                    }
-
-                    // 添加相关主题
-                    if (data.RelatedTopics) {
-                        for (const topic of data.RelatedTopics.slice(0, count - 1)) {
-                            if (topic.Text && topic.FirstURL) {
-                                results.push({
-                                    title: topic.Text.split(' - ')[0] || topic.Text,
-                                    snippet: topic.Text,
-                                    url: topic.FirstURL
-                                })
-                            }
-                        }
-                    }
-
-                    return {
-                        success: true,
-                        query,
-                        engine,
-                        count: results.length,
-                        results
-                    }
-                }
-
-                return {
-                    success: false,
-                    error: `不支持的搜索引擎: ${engine}`,
-                    suggestion: '请使用 bing 或 duckduckgo'
-                }
-            } catch (err) {
-                return { success: false, error: `搜索失败: ${err.message}` }
-            }
+            return await searchWeb(args.query, {
+                provider: args.provider,
+                count: args.count,
+                fetchContent: args.fetchContent === true
+            })
         }
     },
 

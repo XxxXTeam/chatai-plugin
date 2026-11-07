@@ -1,4 +1,5 @@
 import config from '../../../config/config.js'
+import { chatLogger } from '../../core/utils/logger.js'
 import { OpenAIClient, GeminiClient, ClaudeClient } from '../../core/adapters/index.js'
 import { getAllTools, setToolContext } from '../../core/utils/toolAdapter.js'
 import { presetManager, FALLBACK_SYSTEM_PROMPT } from '../preset/PresetManager.js'
@@ -8,6 +9,9 @@ import { databaseService } from '../storage/DatabaseService.js'
 import { resolveThinkingOptions } from './ThinkingOptions.js'
 import { normalizeSystemPromptConfig } from './SystemPromptConfig.js'
 import { resolveToolPermission } from '../tools/ToolPermission.js'
+import { resolveHostedSearch } from '../search/NativeSearchService.js'
+
+const logger = chatLogger
 
 let _scopeManager = null
 const ensureScopeManager = async () => {
@@ -190,6 +194,39 @@ export class LlmService {
         }
         if (options.toolChoice !== undefined && options.toolChoice !== null) {
             clientConfig.toolChoice = options.toolChoice
+        }
+        // 工具延迟加载状态：tool_search 命中后会把完整工具注入 client.tools
+        if (options.toolSearchState) {
+            clientConfig.toolSearchState = options.toolSearchState
+        }
+        /*
+         * 官方 hosted search：由适配器在请求体中附加。
+         * 这里按“当前实际渠道”解析，而不是沿用调用方缓存的结论，
+         * 因为回退链路会把同一个 baseOptions 复用到其它渠道上。
+         */
+        const nativeSearchChannel = options.nativeSearchChannel || options.channel || null
+        const channelNativeSearch = nativeSearchChannel?.nativeSearch || {}
+        /*
+         * 官方搜索策略透传到客户端，供内置 web_search 决定是否允许降级：
+         * 渠道显式开关优先，未配置时按 auto（官方优先 + 回退免费引擎）。
+         */
+        clientConfig.nativeSearchPolicy =
+            channelNativeSearch.enabled === true ? 'force' : channelNativeSearch.enabled === false ? 'off' : 'auto'
+        if (options.nativeSearch !== false && enableTools) {
+            const nativeSearch =
+                options.nativeSearch && typeof options.nativeSearch === 'object'
+                    ? options.nativeSearch
+                    : resolveHostedSearch({
+                          adapterType,
+                          baseUrl,
+                          model: options.model || config.get('llm.models.chat') || config.get('llm.defaultModel') || '',
+                          apiInterface,
+                          hasFunctionTools: tools.length > 0,
+                          channel: nativeSearchChannel
+                      })
+            if (nativeSearch?.enabled) {
+                clientConfig.nativeSearch = nativeSearch
+            }
         }
 
         if (options.apiInterface || options.openaiApiInterface) {

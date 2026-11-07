@@ -19,10 +19,11 @@ import { SkillsAgent, convertMcpTools } from './SkillsAgent.js'
 import { resolveConfiguredToolChoice } from '../tools/ToolChoiceService.js'
 import { resolveThinkingOptions as resolveConfiguredThinkingOptions } from '../llm/ThinkingOptions.js'
 import { resolveChannelSystemPrompt } from '../llm/SystemPromptConfig.js'
-import { resolveClientTemperature } from '../llm/TemperatureResolver.js'
+import { resolveClientTemperature, resolveTemperature } from '../llm/TemperatureResolver.js'
 import { attachToolMetadata } from '../../core/adapters/tooling.js'
 import { applySkillToolConstraints, getSkillToolConstraints } from '../skills/SkillToolConstraints.js'
 import { resolveToolPermission } from '../tools/ToolPermission.js'
+import { getToolSearchSettings } from '../search/SearchSettings.js'
 import { sendSegmentedMessage } from '../../utils/messageSegment.js'
 import { delegateRequest } from '../llm/LlmDelegator.js'
 /**
@@ -59,6 +60,17 @@ const KNOWLEDGE_GRAPH_TOOL_GUIDE = `【知识图谱维护】
 - 对话中确认了用户/群成员之间的事实（身份、关系、喜好、事件等）时，主动用 kg_save_entity / kg_save_relation 写入图谱；发现新事实就写，不要等用户要求
 - 回答涉及"你和谁是什么关系""之前说过什么""群里有哪些人物/话题"这类结构性问题前，先用 kg_get_knowledge / kg_search_entities / kg_list_entities 查询，不要凭空作答
 - 用户纠正或推翻之前的说法时，用 kg_update_entity 更新对应实体，不要新建重复节点；用户明确表示某信息作废时，用 kg_delete_entity 删除`
+
+/**
+ * 工具延迟加载说明。
+ * 仅在 tool_search 确实已暴露时注入，提示模型先检索再调用。
+ * @constant {string}
+ */
+const TOOL_SEARCH_GUIDE = `【工具检索】
+- 当前只加载了常用核心工具，其余工具需要先调用 tool_search 检索，命中后会自动加载，下一轮即可直接调用
+- 需要某个具体能力（例如群管理、绘图、GitHub、定时提醒、知识图谱）但当前没有对应工具时，先用简短关键词调用 tool_search，不要直接回答"没有这个功能"
+- tool_search 支持中文描述，例如"禁言成员""生成图片""查我的记忆"；一次没搜到就换更短的关键词再试
+- 已加载的工具会直接出现在工具列表中，正常调用即可，无需重复检索`
 
 /** 记忆相关工具名，用于判断是否需要注入 MEMORY_TOOL_GUIDE */
 const MEMORY_TOOL_NAMES = [
@@ -481,9 +493,53 @@ export class ChatAgent {
             logger.debug(`[ChatAgent] 已添加 SKILL.md 文档技能指令 (${skillDocumentInstructions.length} 字符)`)
         }
 
+        // 给工具注入 skills 分组标签，让模型从 description 识别工具类别
+        const taggedTools = this._tagToolsWithSkillGroup(allTools)
+
+        /*
+         * 工具延迟加载：开启后只暴露核心工具 + tool_search。
+         * 模型通过 tool_search 检索其余工具，命中后由工具本身把完整 schema 注入 client.tools。
+         * tool_search 不可用（例如工具类别被禁用）时退回全量暴露，避免模型完全无法发现工具。
+         */
+        const toolSearchSettings = getToolSearchSettings()
+        let exposedTools = taggedTools
+        let toolSearchState = null
+        if (toolSearchSettings.enabled && taggedTools.length > 0) {
+            const toolByName = new Map()
+            for (const tool of taggedTools) {
+                const name = tool.function?.name || tool.name
+                if (name && !toolByName.has(name)) toolByName.set(name, tool)
+            }
+            if (toolByName.has('tool_search')) {
+                const coreNames = new Set(toolSearchSettings.coreTools)
+                coreNames.add('tool_search')
+                const coreTools = []
+                for (const [name, tool] of toolByName) {
+                    if (coreNames.has(name)) coreTools.push(tool)
+                }
+                exposedTools = coreTools
+                toolSearchState = {
+                    candidates: taggedTools,
+                    loaded: new Set(coreTools.map(tool => tool.function?.name || tool.name)),
+                    maxResults: toolSearchSettings.maxResults,
+                    autoLoad: toolSearchSettings.autoLoad
+                }
+                logger.debug(`[ChatAgent] 工具延迟加载: 暴露 ${coreTools.length}/${taggedTools.length} 个核心工具`)
+            } else {
+                logger.warn('[ChatAgent] 已开启工具延迟加载，但 tool_search 不可用，退回全量工具')
+            }
+        } else {
+            /*
+             * 未开启延迟加载时全量工具已直接暴露，tool_search 没有任何可补充的内容。
+             * 它的描述会告诉模型“当前只加载了核心工具，其余需要检索”，与实际情况相反，
+             * 会诱导模型做一次无意义的检索（真实案例：模型反复调用后报“没有可检索的工具”）。
+             */
+            exposedTools = taggedTools.filter(tool => (tool.function?.name || tool.name) !== 'tool_search')
+        }
+
         // 添加工具能力提示词（当有工具可用时）
-        if (allTools.length > 0) {
-            systemPrompt = this._addToolPrompt(systemPrompt, allTools)
+        if (exposedTools.length > 0) {
+            systemPrompt = this._addToolPrompt(systemPrompt, exposedTools)
         }
 
         // 过滤历史
@@ -506,9 +562,6 @@ export class ChatAgent {
         }
         messages.push(...validHistory, userMessage)
 
-        // 给工具注入 skills 分组标签，让模型从 description 识别工具类别
-        const taggedTools = this._tagToolsWithSkillGroup(allTools)
-
         // 创建客户端
         const clientOptions = await this._buildClientOptions({
             model: llmModel,
@@ -516,7 +569,8 @@ export class ChatAgent {
             adapterType,
             event,
             presetId: effectivePresetId,
-            tools: taggedTools,
+            tools: exposedTools,
+            toolSearchState,
             preset: currentPreset,
             toolChoice: configuredToolChoice,
             userPermission
@@ -1189,6 +1243,11 @@ chat 组仅限纯问候闲聊（你好/谢谢/再见等）；凡涉及数据获�
             sections.push(KNOWLEDGE_GRAPH_TOOL_GUIDE)
         }
 
+        /* 延迟加载模式下，必须明确告诉模型"还有工具可以检索" */
+        if (availableNames.has('tool_search')) {
+            sections.push(TOOL_SEARCH_GUIDE)
+        }
+
         systemPrompt += `\n\n${sections.join('\n\n')}`
 
         return systemPrompt
@@ -1325,7 +1384,7 @@ chat 组仅限纯问候闲聊（你好/谢谢/再见等）；凡涉及数据获�
      * 构建客户端选项
      */
     async _buildClientOptions(options) {
-        const { channel, event, presetId, tools, preset, toolChoice } = options
+        const { channel, event, presetId, tools, preset, toolChoice, toolSearchState } = options
 
         const clientOptions = {
             enableTools: tools?.length > 0,
@@ -1337,6 +1396,10 @@ chat 组仅限纯问候闲聊（你好/谢谢/再见等）；凡涉及数据获�
                 userPermission: options.userPermission
             })
         }
+        // 工具延迟加载状态：tool_search 命中后把完整工具注入 client.tools
+        if (toolSearchState) {
+            clientOptions.toolSearchState = toolSearchState
+        }
         if (toolChoice !== undefined && toolChoice !== null) {
             clientOptions.toolChoice = toolChoice
         }
@@ -1344,6 +1407,11 @@ chat 组仅限纯问候闲聊（你好/谢谢/再见等）；凡涉及数据获�
         if (channel) {
             clientOptions.adapterType = channel.adapterType
             clientOptions.baseUrl = channel.baseUrl
+            /*
+             * 供 LlmService 解析官方 hosted search 的渠道覆盖（channel.nativeSearch）。
+             * 只用于解析，BaseClientOptions 的白名单会丢弃该字段，不会进入客户端实例。
+             */
+            clientOptions.nativeSearchChannel = channel
             const keyInfo = channelManager.getChannelKey(channel)
             clientOptions.apiKey = keyInfo.key
             clientOptions.keyIndex = keyInfo.keyIndex
